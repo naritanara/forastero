@@ -19,7 +19,7 @@ from forastero.driver import BaseDriver
 from .transaction import StreamTransaction
 
 
-class StreamInitiator(BaseDriver):
+class StreamInitiator(BaseDriver[StreamTransaction]):
     async def drive(self, obj: StreamTransaction) -> None:
         self.io.set("data", obj.data)
         self.io.set("valid", 1)

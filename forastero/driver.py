@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import dataclasses
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from enum import Enum, auto
 from random import Random
-from typing import Any
+from typing import Any, Generic, TypeVar, overload
 
 import cocotb
 from cocotb.handle import SimHandleBase
@@ -42,14 +42,16 @@ class DriverEvent(Enum):
 class DriverStatistics:
     dequeued: int = 0
 
+TX = TypeVar("TX", bound=BaseTransaction)
+
 
 @dataclasses.dataclass()
-class EnqueuedIterable:
-    iterable: Iterable
-    wait_for: DriverEvent
+class EnqueuedIterable(Generic[TX]):
+    iterable: Iterable[TX]
+    wait_for: DriverEvent | None
+    _iterator: Iterator[TX] | None = None
 
-
-class BaseDriver(Component):
+class BaseDriver(Component, Generic[TX]):
     """
     Component for driving transactions onto an interface matching the
     implementation's signalling protocol.
@@ -74,7 +76,7 @@ class BaseDriver(Component):
     ) -> None:
         super().__init__(tb, io, clk, rst, random, name, blocking)
         self.stats = DriverStatistics()
-        self._queue: Queue[BaseTransaction] = Queue()
+        self._queue: Queue[TX | EnqueuedIterable[TX]] = Queue()
         cocotb.start_soon(self._driver_loop())
 
     @property
@@ -87,9 +89,25 @@ class BaseDriver(Component):
         """Return how many entries are queued up"""
         return self._queue.level
 
+    @overload
     def enqueue(
         self,
-        transaction: BaseTransaction | Iterable[BaseTransaction],
+        transaction: TX | Iterable[TX],
+        wait_for: None = None,
+    ) -> None:
+        ...
+
+    @overload
+    def enqueue(
+        self,
+        transaction: TX | Iterable[TX],
+        wait_for: DriverEvent,
+    ) -> Event:
+        ...
+
+    def enqueue(
+        self,
+        transaction: TX | Iterable[TX],
         wait_for: DriverEvent | None = None,
     ) -> Event | None:
         """
@@ -110,10 +128,11 @@ class BaseDriver(Component):
             if wait_for is not None:
                 transaction._f_event = f_event
                 transaction._c_event = c_event
+            tx = transaction
         # Handle a transaction iterable
         elif isinstance(transaction, Iterable):
             # Wrap iterable in EnqueuedIterable
-            transaction = EnqueuedIterable(iterable=transaction, wait_for=wait_for)
+            tx = EnqueuedIterable(iterable=transaction, wait_for=wait_for)
         # Bail
         else:
             raise TypeError(
@@ -121,16 +140,16 @@ class BaseDriver(Component):
                 f"an iterable unlike {transaction}"
             )
         # Queue up the transaction with no delay
-        self._queue.push(transaction)
+        self._queue.push(tx)
         # Notify any enqueue subscribers
-        self.publish(DriverEvent.ENQUEUE, transaction)
+        self.publish(DriverEvent.ENQUEUE, tx)
         # Immediately set event if waiting for enqueue
         if f_event is DriverEvent.ENQUEUE:
             c_event.set()
         # Return the cocotb Event
         return c_event
 
-    async def _get_from_queue(self) -> BaseTransaction:
+    async def _get_from_queue(self) -> TX:
         """
         Fetch next item from the queue.
         Process iterables and add events to yielded BaseTransaction
@@ -139,14 +158,14 @@ class BaseDriver(Component):
             await self._queue.wait_for_not_empty()
             obj = self._queue.peek()
             if isinstance(obj, BaseTransaction):
-                obj = await self._queue.pop()
+                await self._queue.pop() # could return obj, but we would lose the type information
                 return obj
             else:
                 # obj is an EnqueuedIterable - yield from iterable, append events (if any)
                 # and pop from queue when exhausted
                 while True:
                     try:
-                        if not hasattr(obj, "_iterator"):
+                        if obj._iterator is None:
                             obj._iterator = iter(obj.iterable)
                         next_item = next(obj._iterator)
                         if not isinstance(next_item, BaseTransaction):
@@ -194,7 +213,7 @@ class BaseDriver(Component):
             # Release the lock
             self.release()
 
-    async def drive(self, obj: BaseTransaction) -> None:
+    async def drive(self, obj: TX) -> None:
         """
         Placeholder driver, this should be overridden by a child class to match
         the signalling protocol of the interface's implementation.

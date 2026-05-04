@@ -19,7 +19,7 @@ from forastero.driver import BaseDriver
 from .transaction import StreamBackpressure
 
 
-class StreamResponder(BaseDriver):
+class StreamResponder(BaseDriver[StreamBackpressure]):
     async def drive(self, obj: StreamBackpressure) -> None:
         self.io.set("ready", obj.ready)
         await ClockCycles(self.clk, obj.cycles)

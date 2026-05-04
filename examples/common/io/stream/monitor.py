@@ -21,8 +21,8 @@ from forastero import BaseMonitor
 from .transaction import StreamTransaction
 
 
-class StreamMonitor(BaseMonitor):
-    async def monitor(self, capture: Callable) -> None:
+class StreamMonitor(BaseMonitor[StreamTransaction]):
+    async def monitor(self, capture: Callable[[StreamTransaction], None]) -> None:
         while True:
             await RisingEdge(self.clk)
             if self.rst.value == self.tb.rst_active_value:
