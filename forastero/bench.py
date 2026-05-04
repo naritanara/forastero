@@ -33,7 +33,7 @@ from cocotb.handle import HierarchyObject, SimHandleBase
 from cocotb.task import Task
 from cocotb.triggers import ClockCycles, Event, Trigger, with_timeout
 
-from ._cocotb_compat import SimLogFormatter, SimTimeContextFilter, SimTimeoutError
+from ._cocotb_compat import LogicObject, SimLogFormatter, SimTimeContextFilter, SimTimeoutError
 from ._cocotb_compat.typing import TimeUnit
 from .component import Component
 from .driver import BaseDriver
@@ -86,11 +86,14 @@ class BaseBench:
         "testcases": {},
     }
 
+    clk: LogicObject | None
+    rst: LogicObject | None
+
     def __init__(
         self,
         dut: HierarchyObject,
-        clk: SimHandleBase,
-        rst: SimHandleBase,
+        clk: SimHandleBase | None = None,
+        rst: SimHandleBase | None = None,
         rst_active_high: bool = True,
         clk_drive: bool = True,
         clk_period: float = 1,
@@ -99,6 +102,8 @@ class BaseBench:
         # Hold a pointer to the DUT
         self.dut = dut
         # Promote clock & reset
+        assert clk is None or isinstance(clk, LogicObject)
+        assert rst is None or isinstance(rst, LogicObject)
         self.clk = clk
         self.rst = rst
 
@@ -196,6 +201,9 @@ class BaseBench:
 
     async def initialise(self) -> None:
         """Initialise the DUT's I/O"""
+        if self.rst is None:
+            raise RuntimeError("Called initialise in a testbench with no reset signal")
+
         self.rst.value = self.rst_active_value
         for comp in self._components.values():
             comp.io.initialise(IORole.opposite(comp.io.role))
@@ -209,17 +217,23 @@ class BaseBench:
         :param wait_after:  Clock cycles to wait after lowering reset (defaults to 1)
         """
         # Drive reset high
+        if self.rst is None:
+            raise RuntimeError("Called reset in a testbench with no reset signal")
         self.rst.value = self.rst_active_value
         # Initialise I/O
         if init:
             await self.initialise()
         # Wait before dropping reset
         if wait_during > 0:
+            if self.clk is None:
+                raise RuntimeError("Specified wait_during but no clock signal in testbench")
             await ClockCycles(self.clk, wait_during)
         # Drop reset
         self.rst.value = self.rst_inactive_value
         # Wait for a bit
         if wait_after > 0:
+            if self.clk is None:
+                raise RuntimeError("Specified wait_after but no clock signal in testbench")
             self.info(f"Waiting for {wait_after} cycles")
             await ClockCycles(self.clk, wait_after)
 
@@ -342,7 +356,7 @@ class BaseBench:
         sequence: tuple[
             BaseSequence,
             Callable[
-                [logging.Logger, random.Random, SeqArbiter, SimHandleBase, SimHandleBase],
+                [logging.Logger, random.Random, SeqArbiter, LogicObject | None, LogicObject | None],
                 Coroutine[Trigger, None, None],
             ],
         ],
@@ -405,6 +419,8 @@ class BaseBench:
                 await seq_task
             # Wait for minimum delay
             self._orch_log.debug("Waiting for minimum delay")
+            if self.clk is None:
+                raise RuntimeError("Called close_down on testbench with no clock signal")
             await ClockCycles(self.clk, delay)
             # Wait for all drivers to return to idle
             for driver in drivers:
@@ -481,6 +497,8 @@ class BaseBench:
 
                 # If clock driving specified, start the clock
                 if tb.clk_drive:
+                    if tb.clk is None:
+                        raise RuntimeError("Specified clk_drive on testbench with no clock signal")
                     cocotb.start_soon(Clock(tb.clk, tb.clk_period, tb.clk_units).start())
 
                 # If reset requested, run the sequence
@@ -514,6 +532,10 @@ class BaseBench:
 
                     # If clock driving specified, start the clock
                     if tb.clk_drive:
+                        if tb.clk is None:
+                            raise RuntimeError(
+                                "Specified clk_drive on testbench with no clock signal"
+                            )
                         cocotb.start_soon(Clock(tb.clk, tb.clk_period, tb.clk_units).start())
 
                     # If reset requested, run the sequence

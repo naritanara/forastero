@@ -1,5 +1,6 @@
 # Support for cocotb 2.X
 try:
+    from cocotb.handle import LogicObject  # pyright: ignore[reportMissingImports]
     from cocotb.logging import (  # pyright: ignore[reportMissingImports]
         SimLogFormatter,
         SimTimeContextFilter,
@@ -7,6 +8,7 @@ try:
     from cocotb.triggers import SimTimeoutError  # pyright: ignore[reportMissingImports]
 # Fallback for cocotb 1.X
 except ImportError:
+    from cocotb.handle import SimHandleBase as LogicObject  # pyright: ignore[reportMissingImports]
     from cocotb.log import (  # pyright: ignore[reportMissingImports]
         SimLogFormatter,
         SimTimeContextFilter,
@@ -19,5 +21,6 @@ __all__ = [
     "SimLogFormatter",
     "SimTimeContextFilter",
     "SimTimeoutError",
+    "LogicObject",
     "typing",
 ]

@@ -16,10 +16,10 @@ import asyncio
 from random import Random
 from typing import Any, ClassVar
 
-# TODO @intuity: Is there a better type
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import RisingEdge
 
+from ._cocotb_compat import LogicObject
 from .event import EventEmitter
 from .io import BaseIO
 
@@ -37,6 +37,9 @@ class Component(EventEmitter):
     :param name:     Unique name for this component instance (optional)
     :param blocking: Whether this component should block shutdown (default: True)
     """
+
+    clk: LogicObject
+    rst: LogicObject
 
     # Tracks all component instances
     COMPONENTS: ClassVar[list["Component"]] = []
@@ -56,6 +59,8 @@ class Component(EventEmitter):
 
         assert isinstance(tb, BaseBench), "'tb' should inherit from BaseBench"
         assert isinstance(io, BaseIO), "'io' should inherit from BaseIO"
+        assert isinstance(clk, LogicObject), "'clk' should be a LogicObject"
+        assert isinstance(rst, LogicObject), "'rst' should be a LogicObject"
         # Setup emitter behaviours
         super().__init__()
         # Setup component variables
