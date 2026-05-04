@@ -33,16 +33,8 @@ from cocotb.handle import HierarchyObject, SimHandleBase
 from cocotb.task import Task
 from cocotb.triggers import ClockCycles, Event, with_timeout
 
-# Support for cocotb 2.X
-try:
-    from cocotb.logging import SimLogFormatter, SimTimeContextFilter
-    from cocotb.triggers import SimTimeoutError
-# Fallback for cocotb 1.X
-except ImportError:
-    from cocotb.log import SimLogFormatter, SimTimeContextFilter
-    from cocotb.result import SimTimeoutError
-
-from ._cocotb_compat import TimeUnit
+from ._cocotb_compat import SimLogFormatter, SimTimeContextFilter, SimTimeoutError
+from ._cocotb_compat.typing import TimeUnit
 from .component import Component
 from .driver import BaseDriver
 from .io import IORole
