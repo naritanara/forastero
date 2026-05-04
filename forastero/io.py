@@ -27,7 +27,7 @@ class IORole(IntEnum):
     RESPONDER = 1
 
     @staticmethod
-    def opposite(value: "IntEnum") -> "IntEnum":
+    def opposite(value: "IORole") -> "IORole":
         return {IORole.INITIATOR: IORole.RESPONDER, IORole.RESPONDER: IORole.INITIATOR}[value]
 
 

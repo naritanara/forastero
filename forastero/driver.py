@@ -179,7 +179,7 @@ class BaseDriver(Component):
             # Lock out the driver (prevents shutdown mid-stimulus)
             await self.lock()
             # Set the timestamp where the transaction was about to be driven
-            obj.timestamp = get_sim_time("ns")
+            obj.timestamp = int(get_sim_time("ns"))
             # Notify any pre-drive subscribers
             self.publish(DriverEvent.PRE_DRIVE, obj)
             if obj._f_event is DriverEvent.PRE_DRIVE:

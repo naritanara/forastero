@@ -33,7 +33,7 @@ class BaseTransaction:
     """
 
     timestamp: int = dataclasses.field(
-        default_factory=lambda: get_sim_time("ns"), compare=False
+        default_factory=lambda: int(get_sim_time("ns")), compare=False
     )
 
     _f_event: Enum | None = dataclasses.field(default=None, compare=False)
@@ -54,7 +54,7 @@ class BaseTransaction:
         if field == "timestamp":
             return f"{value} ns"
         elif isinstance(value, Enum):
-            return f"{value.name} ({int(value)})"
+            return f"{value.name} ({value.value})"
         elif isinstance(value, int):
             return f"0x{value:X}"
         elif hasattr(value, "__int__"):

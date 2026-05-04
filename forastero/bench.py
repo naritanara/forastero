@@ -31,7 +31,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.handle import HierarchyObject, SimHandleBase
 from cocotb.task import Task
-from cocotb.triggers import ClockCycles, Event, with_timeout
+from cocotb.triggers import ClockCycles, Event, Trigger, with_timeout
 
 from ._cocotb_compat import SimLogFormatter, SimTimeContextFilter, SimTimeoutError
 from ._cocotb_compat.typing import TimeUnit
@@ -67,7 +67,7 @@ class BaseBench:
     """
 
     TEST_REQ_PARAMS: ClassVar[dict[Any, list[tuple[str, Callable[[str], Any]]]]] = defaultdict(list)
-    PARAM_FILE_PATH: ClassVar[str] = os.environ.get("TEST_PARAMS", None)
+    PARAM_FILE_PATH: ClassVar[str | None] = os.environ.get("TEST_PARAMS", None)
     PARAM_DEFAULTS: ClassVar[dict[str, Any]] = {
         # Random seed
         "seed": 0,
@@ -89,8 +89,8 @@ class BaseBench:
     def __init__(
         self,
         dut: HierarchyObject,
-        clk: SimHandleBase | None = None,
-        rst: SimHandleBase | None = None,
+        clk: SimHandleBase,
+        rst: SimHandleBase,
         rst_active_high: bool = True,
         clk_drive: bool = True,
         clk_period: float = 1,
@@ -237,7 +237,7 @@ class BaseBench:
     def register(
         self,
         name: str,
-        comp_or_coro: Component | Coroutine = None,
+        comp_or_coro: Component | Coroutine,
         scoreboard: bool = True,
         sb_queues: list[str] | tuple[str] | None = None,
         sb_filter: Callable | None = None,
@@ -342,7 +342,8 @@ class BaseBench:
         sequence: tuple[
             BaseSequence,
             Callable[
-                [logging.Logger, random.Random, SeqArbiter, SimHandleBase, SimHandleBase], None
+                [logging.Logger, random.Random, SeqArbiter, SimHandleBase, SimHandleBase],
+                Coroutine[Trigger, None, None],
             ],
         ],
         blocking: bool = True,

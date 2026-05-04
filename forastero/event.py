@@ -37,8 +37,8 @@ class DataEvent(Event):
         return self.payload
 
     @data.setter
-    def data(self, value):
-        self.payload = value
+    def data(self, new_data):
+        self.payload = new_data
 
 
 class EventEmitter:

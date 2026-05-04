@@ -16,7 +16,7 @@ import contextlib
 import itertools
 import logging
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Coroutine, Iterable
 from enum import Enum, auto
 from logging import Logger
 from random import Random
@@ -25,6 +25,8 @@ from typing import Any, ClassVar, Generic, Self, TypeVar
 import cocotb
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import Event, First, Lock
+
+from forastero.io import BaseIO
 
 from .component import Component
 from .driver import BaseDriver
@@ -40,17 +42,17 @@ class SeqLock:
     """
 
     # Locks for components
-    _COMPONENT_LOCKS: ClassVar[dict[Component, Self]] = {}
+    _COMPONENT_LOCKS: ClassVar[dict[Component, "SeqLock"]] = {}
     # Named locks
-    _NAMED_LOCKS: ClassVar[dict[str, Self]] = {}
+    _NAMED_LOCKS: ClassVar[dict[str, "SeqLock"]] = {}
 
     def __init__(self, name: str) -> None:
         self._name = name
         self._lock = Lock()
-        self._locked_by: BaseSequence | None = None
+        self._locked_by: SeqContext | None = None
 
     @classmethod
-    def get_component_lock(cls, comp: Component) -> Self:
+    def get_component_lock(cls, comp: Component) -> "SeqLock":
         """
         Retrieve the shared lock for a specific component.
 
@@ -64,7 +66,7 @@ class SeqLock:
             return lock
 
     @classmethod
-    def get_named_lock(cls, name: str) -> Self:
+    def get_named_lock(cls, name: str) -> "SeqLock":
         """
         Retrieve a shared named lock (distinct from all component locks).
 
@@ -78,23 +80,23 @@ class SeqLock:
             return lock
 
     @classmethod
-    def get_all_component_locks(cls) -> Iterable[tuple[Component, Self]]:
+    def get_all_component_locks(cls) -> Iterable[tuple[Component, "SeqLock"]]:
         """Return a list of all known component locks"""
         yield from cls._COMPONENT_LOCKS.items()
 
     @classmethod
-    def get_all_named_locks(cls) -> Iterable[tuple[str, Self]]:
+    def get_all_named_locks(cls) -> Iterable[tuple[str, "SeqLock"]]:
         """Return a list of all known named locks"""
         yield from cls._NAMED_LOCKS.items()
 
     @classmethod
-    def get_all_locks(cls) -> Iterable[Self]:
+    def get_all_locks(cls) -> Iterable["SeqLock"]:
         """Return a list of all known locks"""
         yield from cls._COMPONENT_LOCKS.values()
         yield from cls._NAMED_LOCKS.values()
 
     @classmethod
-    def count_all_locks(cls) -> Iterable[Self]:
+    def count_all_locks(cls) -> int:
         """Return the total number of locks"""
         return len(cls._COMPONENT_LOCKS) + len(cls._NAMED_LOCKS)
 
@@ -145,7 +147,7 @@ class SeqRandomVariable:
     :param choices:   Make a random selection from a list of choices
     """
 
-    SUFFIXES: ClassVar[tuple[str]] = ("bit_width", "range", "choices")
+    SUFFIXES: ClassVar[tuple[str, str, str]] = ("bit_width", "range", "choices")
 
     def __init__(
         self,
@@ -184,8 +186,8 @@ class SeqRandomVariable:
             ), "Choices must be a tuple of at least one value"
 
     @property
-    def varnames(self) -> tuple[str]:
-        return [self.name] + [f"{self.name}_{s}" for s in self.SUFFIXES]
+    def varnames(self) -> tuple[str, ...]:
+        return self.name, *tuple(f"{self.name}_{s}" for s in self.SUFFIXES)
 
     def randomise(
         self,
@@ -198,20 +200,22 @@ class SeqRandomVariable:
         if bit_width is not None:
             return random.getrandbits(bit_width)
         elif range is not None:
-            if all(isinstance(x, int) for x in range):
-                return random.randrange(*range)
+            start, stop = range
+            if isinstance(start, int) and isinstance(stop, int):
+                return random.randrange(start, stop)
             else:
-                return random.uniform(*range)
+                return random.uniform(start, stop)
         elif choices is not None:
             return random.choice(choices)
         # Otherwise evaluate default behaviour
         if self.bit_width is not None:
             return random.getrandbits(self.bit_width)
         elif self.range is not None:
-            if all(isinstance(x, int) for x in self.range):
-                return random.randrange(*self.range)
+            start, stop = self.range
+            if isinstance(start, int) and isinstance(stop, int):
+                return random.randrange(start, stop)
             else:
-                return random.uniform(*self.range)
+                return random.uniform(start, stop)
         elif self.choices is not None:
             return random.choices(self.choices)
         # Should not get here!
@@ -284,10 +288,10 @@ class SeqProxy(EventEmitter, Generic[C]):
         return self._component.rst
 
     @property
-    def io(self) -> SimHandleBase:
+    def io(self) -> BaseIO:
         return self._component.io
 
-    def idle(self) -> None:
+    def idle(self) -> Coroutine[Any, Any, None]:
         """Forward idle through to the wrapped component"""
         return self._component.idle()
 
@@ -345,6 +349,7 @@ class SeqArbiter:
                 pre_queue, pre_free = len(self._queue), available.copy()
                 # Schedule as many sequences as possible
                 scheduled = []
+                locks = None
                 for idx in order:
                     # Pickup the entry
                     ctx, locks, evt = self._queue[idx]
@@ -364,6 +369,8 @@ class SeqArbiter:
                         break
                 # Log what was scheduled when in debug mode
                 if self._debug and (post_sched := len(scheduled)) > 0:
+                    if locks is None:
+                        raise RuntimeError("unreachable")
                     post_claim, post_diff = locks[:], pre_free.difference(locks)
                     msg = (
                         f"Scheduled {post_sched} "
@@ -496,8 +503,7 @@ class BaseSequence:
     :param fn: The sequencing function being wrapped
     """
 
-    REGISTRY: ClassVar[dict[Callable, "BaseSequence"]] = {}
-    LOCKS: ClassVar[dict[str, SeqLock]] = defaultdict(SeqLock)
+    REGISTRY: ClassVar[dict[int, "BaseSequence"]] = {}
 
     def __init__(self, fn: Callable, auto_lock: bool = False) -> None:
         # Ensure that this wrapper is unique for the sequencing function
@@ -518,7 +524,7 @@ class BaseSequence:
         return self._fn.__name__
 
     @classmethod
-    def register(cls, fn: Callable | Self) -> Self:
+    def register(cls, fn: "Callable | BaseSequence") -> "BaseSequence":
         """
         Uniquely wrap a sequencing function inside a BaseSequence, returning the
         shared instance on future invocations.
@@ -666,7 +672,7 @@ class BaseSequence:
         return self, _inner
 
 
-def sequence(auto_lock: bool = False) -> BaseSequence:
+def sequence(auto_lock: bool = False) -> Callable[[Callable], Callable]:
     """
     Decorator used to wrap a sequencing function, for now there are no arguments
     and the argument pattern is just a placeholder for future extension.
@@ -685,7 +691,7 @@ def sequence(auto_lock: bool = False) -> BaseSequence:
     return _inner
 
 
-def requires(req_name: str, req_type: Any | None = None) -> BaseSequence:
+def requires(req_name: str, req_type: Any | None = None) -> Callable[[Callable], Callable]:
     """
     Decorator used to add a requirement on a driver/monitor or an arbitrarily
     named lock to a sequencing function.
@@ -709,7 +715,7 @@ def randarg(
     bit_width: int | None = None,
     range: tuple[int | float, int | float] | None = None,  # noqa: A002
     choices: tuple[Any] | None = None,
-) -> BaseSequence:
+) -> Callable[[Callable], Callable]:
     """
     Decorator used to add a randomised argument to a sequence definition, that
     can be randomised in a number of different ways. Only one method of

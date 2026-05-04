@@ -1,6 +1,6 @@
 from typing import Any
 
-from cocotb.triggers import Event
+from cocotb.triggers import Event, Trigger
 
 
 class QueueEmptyError(Exception):
@@ -61,7 +61,7 @@ class Queue:
             await self.wait()
         return self._entries.pop(index)
 
-    def wait(self) -> None:
+    def wait(self) -> Trigger:
         """Register an 'on-push' event and wait for it to be set by a push"""
         return self.on_push_event.wait()
 

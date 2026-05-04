@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from enum import Enum, auto
 from logging import Logger
+from typing import TYPE_CHECKING, overload
 
 import cocotb
 from cocotb.triggers import First, RisingEdge, Timer
@@ -365,7 +366,16 @@ class FunnelChannel(Channel):
     def reference_depth(self) -> int:
         return sum(x.level for x in self._q_ref.values())
 
+    if TYPE_CHECKING:
+        @overload
+        def push_reference(self, *transactions: BaseException) -> None:
+            ...
+
+    @overload
     def push_reference(self, queue: str, *transactions: BaseException) -> None:
+        ...
+
+    def push_reference(self, queue: str | BaseException, *transactions: BaseException) -> None:
         """
         Push one or more captured transactions into a given reference (model)
         queue.
@@ -394,12 +404,15 @@ class FunnelChannel(Channel):
         while True:
             next_mon = self._q_mon.peek()
             any_empty = False
+            queue = None
             for queue in self._q_ref.values():
                 any_empty = any_empty or (queue.level == 0)
                 if queue.level > 0 and queue.peek() == next_mon:
                     await self._q_mon.pop()
                     next_ref = await queue.pop()
                     return next_mon, next_ref
+            if queue is None:
+                raise RuntimeError("No reference queue")
             # If all queues contain objects but none matched, this is a mismatch!
             # NOTE: This will just pop the final queue in order to report miscompare
             if not any_empty:
