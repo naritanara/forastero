@@ -42,6 +42,7 @@ except ImportError:
     from cocotb.log import SimLogFormatter, SimTimeContextFilter
     from cocotb.result import SimTimeoutError
 
+from ._cocotb_compat import TimeUnit
 from .component import Component
 from .driver import BaseDriver
 from .io import IORole
@@ -101,7 +102,7 @@ class BaseBench:
         rst_active_high: bool = True,
         clk_drive: bool = True,
         clk_period: float = 1,
-        clk_units: str = "ns",
+        clk_units: TimeUnit = "ns",
     ) -> None:
         # Hold a pointer to the DUT
         self.dut = dut
@@ -114,7 +115,7 @@ class BaseBench:
         # Clock driving
         self.clk_drive = clk_drive
         self.clk_period = clk_period
-        self.clk_units = clk_units
+        self.clk_units: TimeUnit = clk_units
         # Alias logging methods
         self.log = logging.getLogger("tb")
         self.debug = self.log.debug
@@ -487,7 +488,7 @@ class BaseBench:
 
                 # If clock driving specified, start the clock
                 if tb.clk_drive:
-                    cocotb.start_soon(Clock(tb.clk, tb.clk_period, units=tb.clk_units).start())
+                    cocotb.start_soon(Clock(tb.clk, tb.clk_period, tb.clk_units).start())
 
                 # If reset requested, run the sequence
                 if reset:
@@ -520,7 +521,7 @@ class BaseBench:
 
                     # If clock driving specified, start the clock
                     if tb.clk_drive:
-                        cocotb.start_soon(Clock(tb.clk, tb.clk_period, units=tb.clk_units).start())
+                        cocotb.start_soon(Clock(tb.clk, tb.clk_period, tb.clk_units).start())
 
                     # If reset requested, run the sequence
                     if reset:

@@ -221,13 +221,13 @@ class Channel:
         """
         while True:
             # Wait for polling delay
-            await Timer(self.polling_ns, units="ns")
+            await Timer(self.polling_ns, "ns")
             # Check for object at the front of the monitor queue
             if (
                 (self.timeout_ns is not None)
                 and (self._q_mon.level > 0)
                 and (
-                    (age := (get_sim_time(units="ns") - self._q_mon.peek().timestamp))
+                    (age := (get_sim_time("ns") - self._q_mon.peek().timestamp))
                     > self.timeout_ns
                 )
             ):
