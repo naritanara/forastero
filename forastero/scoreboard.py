@@ -25,7 +25,8 @@ import cocotb
 from cocotb.triggers import First, RisingEdge, Timer
 from cocotb.utils import get_sim_time
 
-from forastero.bench import BaseBench
+if TYPE_CHECKING:
+    from forastero.bench import BaseBench
 
 from .monitor import BaseMonitor, MonitorEvent
 from .queue import Queue
@@ -511,7 +512,7 @@ class Scoreboard:
 
     def __init__(
         self,
-        tb: BaseBench,
+        tb: "BaseBench",
         fail_fast: bool = False,
         postmortem: bool = False,
     ):

@@ -21,12 +21,12 @@ from common.io.stream import (
     StreamTransaction,
 )
 
-from forastero.bench import BaseBench
+from forastero.bench import BaseBench, HasClock, HasReset
 from forastero.driver import DriverEvent
 from forastero.io import IORole
 
 
-class Testbench(BaseBench):
+class Testbench(BaseBench, HasClock, HasReset):
     """
     Testbench wrapped around the simple 2-to-1 stream arbiter.
 

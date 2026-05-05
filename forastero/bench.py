@@ -25,7 +25,7 @@ from collections import defaultdict
 from collections.abc import Callable, Coroutine
 from logging import Logger
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 import cocotb
 from cocotb.clock import Clock
@@ -85,9 +85,6 @@ class BaseBench:
         # Testcase parameters
         "testcases": {},
     }
-
-    clk: LogicObject | None
-    rst: LogicObject | None
 
     def __init__(
         self,
@@ -201,8 +198,7 @@ class BaseBench:
 
     async def initialise(self) -> None:
         """Initialise the DUT's I/O"""
-        if self.rst is None:
-            raise RuntimeError("Called initialise in a testbench with no reset signal")
+        assert isinstance(self, HasReset)
 
         self.rst.value = self.rst_active_value
         for comp in self._components.values():
@@ -216,24 +212,22 @@ class BaseBench:
         :param wait_during: Clock cycles to hold reset active for (defaults to 20)
         :param wait_after:  Clock cycles to wait after lowering reset (defaults to 1)
         """
+        assert isinstance(self, HasReset)
+
         # Drive reset high
-        if self.rst is None:
-            raise RuntimeError("Called reset in a testbench with no reset signal")
         self.rst.value = self.rst_active_value
         # Initialise I/O
         if init:
             await self.initialise()
         # Wait before dropping reset
         if wait_during > 0:
-            if self.clk is None:
-                raise RuntimeError("Specified wait_during but no clock signal in testbench")
+            assert isinstance(self, HasClock)
             await ClockCycles(self.clk, wait_during)
         # Drop reset
         self.rst.value = self.rst_inactive_value
         # Wait for a bit
         if wait_after > 0:
-            if self.clk is None:
-                raise RuntimeError("Specified wait_after but no clock signal in testbench")
+            assert isinstance(self, HasClock)
             self.info(f"Waiting for {wait_after} cycles")
             await ClockCycles(self.clk, wait_after)
 
@@ -419,8 +413,7 @@ class BaseBench:
                 await seq_task
             # Wait for minimum delay
             self._orch_log.debug("Waiting for minimum delay")
-            if self.clk is None:
-                raise RuntimeError("Called close_down on testbench with no clock signal")
+            assert isinstance(self, HasClock)
             await ClockCycles(self.clk, delay)
             # Wait for all drivers to return to idle
             for driver in drivers:
@@ -497,8 +490,7 @@ class BaseBench:
 
                 # If clock driving specified, start the clock
                 if tb.clk_drive:
-                    if tb.clk is None:
-                        raise RuntimeError("Specified clk_drive on testbench with no clock signal")
+                    assert isinstance(tb, HasClock)
                     cocotb.start_soon(Clock(tb.clk, tb.clk_period, tb.clk_units).start())
 
                 # If reset requested, run the sequence
@@ -532,10 +524,7 @@ class BaseBench:
 
                     # If clock driving specified, start the clock
                     if tb.clk_drive:
-                        if tb.clk is None:
-                            raise RuntimeError(
-                                "Specified clk_drive on testbench with no clock signal"
-                            )
+                        assert isinstance(tb, HasClock)
                         cocotb.start_soon(Clock(tb.clk, tb.clk_period, tb.clk_units).start())
 
                     # If reset requested, run the sequence
@@ -678,6 +667,13 @@ class BaseBench:
 
         return _inner
 
+@runtime_checkable
+class HasClock(Protocol):
+    clk: LogicObject
+
+@runtime_checkable
+class HasReset(Protocol):
+    rst: LogicObject
 
 # Start profiling when it is enabled in the parameters file
 if outfile := BaseBench.get_parameter("profiling"):

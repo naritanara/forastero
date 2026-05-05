@@ -27,9 +27,9 @@ class Queue(Generic[T]):
     def __getitem__(self, key: SupportsIndex) -> T: ...
 
     @overload
-    def __getitem__(self, key: slice[SupportsIndex | None]) -> list[T]: ...
+    def __getitem__(self, key: slice) -> list[T]: ...
 
-    def __getitem__(self, key: SupportsIndex | slice[SupportsIndex | None]) -> T | list[T]:
+    def __getitem__(self, key: SupportsIndex | slice) -> T | list[T]:
         return self._entries[key]
 
     @property
