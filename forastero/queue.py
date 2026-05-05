@@ -1,4 +1,4 @@
-from typing import Generic, TypeVar
+from typing import Generic, SupportsIndex, TypeVar, overload
 
 from cocotb.triggers import Event, Trigger
 
@@ -6,7 +6,9 @@ from cocotb.triggers import Event, Trigger
 class QueueEmptyError(Exception):
     pass
 
+
 T = TypeVar("T")
+
 
 class Queue(Generic[T]):
     """
@@ -21,7 +23,13 @@ class Queue(Generic[T]):
     def __len__(self) -> int:
         return self.level
 
-    def __getitem__(self, key) -> T:
+    @overload
+    def __getitem__(self, key: SupportsIndex) -> T: ...
+
+    @overload
+    def __getitem__(self, key: slice[SupportsIndex | None]) -> list[T]: ...
+
+    def __getitem__(self, key: SupportsIndex | slice[SupportsIndex | None]) -> T | list[T]:
         return self._entries[key]
 
     @property

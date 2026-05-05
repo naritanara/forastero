@@ -15,14 +15,17 @@
 import logging
 from asyncio import Lock
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sized
 from enum import Enum, auto
+from itertools import chain
 from logging import Logger
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Generic, TypeVar, overload
 
 import cocotb
 from cocotb.triggers import First, RisingEdge, Timer
 from cocotb.utils import get_sim_time
+
+from forastero.bench import BaseBench
 
 from .monitor import BaseMonitor, MonitorEvent
 from .queue import Queue
@@ -50,7 +53,15 @@ class DrainPolicy(Enum):
     """Do not wait for either queue to drain"""
 
 
-class Channel:
+T = TypeVar("T")
+TX = TypeVar("TX", bound=BaseTransaction)
+TX_FILTERED = TypeVar("TX_FILTERED", bound=BaseTransaction, infer_variance=True, default=TX)
+
+TransactionFilter = Callable[[BaseMonitor[TX], MonitorEvent, TX], TX_FILTERED]
+ChannelComparisonCallback = Callable[["Channel", T, T], None]
+
+
+class Channel(Generic[TX, TX_FILTERED]):
     """
     A channel gathers transactions from a monitor and a reference model of some
     form. When both queues contain an entry, the top-most entry is popped from
@@ -78,9 +89,9 @@ class Channel:
     def __init__(
         self,
         name: str,
-        monitor: BaseMonitor,
+        monitor: BaseMonitor[TX],
         log: Logger,
-        filter_fn: Callable | None,
+        filter_fn: TransactionFilter[TX, TX_FILTERED] = lambda _mon, evt, obj: obj,
         timeout_ns: int | None = None,
         polling_ns: int = 100,
         drain_policy: DrainPolicy = DrainPolicy.MON_AND_REF,
@@ -100,21 +111,20 @@ class Channel:
         assert (
             isinstance(self.match_window, int) and self.match_window > 0
         ), "Channel matching window must be a positive integer"
-        self._q_mon = Queue()
-        self._q_ref = Queue()
+        self._q_mon = Queue[TX_FILTERED]()
+        self._q_ref = Queue[TX_FILTERED]()
         self._lock = Lock()
         self._matched = 0
         self._mismatched = 0
         self._residence = defaultdict(lambda: 0)
 
-        def _sample(mon: BaseMonitor, evt: MonitorEvent, obj: BaseTransaction) -> None:
+        def _sample(mon: BaseMonitor[TX], evt: MonitorEvent, obj: TX) -> None:
             if mon is self.monitor and evt is MonitorEvent.CAPTURE:
                 # If a filter function was provided, apply it
-                if self.filter_fn is not None:
-                    obj = self.filter_fn(mon, evt, obj)
+                obj_filtered = self.filter_fn(mon, evt, obj)
                 # A filter can drop the transaction, so test for None
-                if obj is not None:
-                    self.push_monitor(obj)
+                if obj_filtered is not None:
+                    self.push_monitor(obj_filtered)
 
         self.monitor.subscribe(MonitorEvent.CAPTURE, _sample)
         cocotb.start_soon(self._polling())
@@ -144,7 +154,7 @@ class Channel:
         """Total number of packets matched/mismatched"""
         return self._matched + self._mismatched
 
-    def push_monitor(self, *transactions: BaseTransaction) -> None:
+    def push_monitor(self, *transactions: TX_FILTERED) -> None:
         """
         Push one or more captured transactions into the monitor's queue.
 
@@ -154,17 +164,28 @@ class Channel:
             assert isinstance(transaction, BaseTransaction)
             self._q_mon.push(transaction)
 
-    def push_reference(self, *transactions: BaseException) -> None:
+    @overload
+    def push_reference(self, *transactions: TX_FILTERED) -> None: ...
+
+    if TYPE_CHECKING:
+
+        @overload
+        def push_reference(self, queue: str, *transactions: TX_FILTERED) -> None: ...
+
+    def push_reference(self, queue: str | TX_FILTERED, *transactions: TX_FILTERED) -> None:
         """
         Push one or more captured transactions into the reference (model) queue.
 
         :param *transactions: Captured transactions
         """
-        for transaction in transactions:
+        if isinstance(queue, str):
+            raise ValueError("Named queues are only supported by FunnelChannel")
+
+        for transaction in chain([queue], transactions):
             assert isinstance(transaction, BaseTransaction)
             self._q_ref.push(transaction)
 
-    async def _dequeue(self) -> tuple[BaseTransaction, BaseTransaction]:
+    async def _dequeue(self) -> tuple[TX_FILTERED, TX_FILTERED]:
         """
         Dequeue the top-most transaction from both the monitor and reference
         queues.
@@ -227,10 +248,7 @@ class Channel:
             if (
                 (self.timeout_ns is not None)
                 and (self._q_mon.level > 0)
-                and (
-                    (age := (get_sim_time("ns") - self._q_mon.peek().timestamp))
-                    > self.timeout_ns
-                )
+                and ((age := (get_sim_time("ns") - self._q_mon.peek().timestamp)) > self.timeout_ns)
             ):
                 self.log.error(
                     f"Object at the front of the of the {self.name} monitor "
@@ -240,7 +258,11 @@ class Channel:
                 self.report()
                 raise ChannelTimeoutError(f"Channel {self.name} timed out")
 
-    async def loop(self, mismatch: Callable, match: Callable | None = None) -> None:
+    async def loop(
+        self,
+        mismatch: ChannelComparisonCallback[TX_FILTERED],
+        match: ChannelComparisonCallback[TX_FILTERED] | None = None,
+    ) -> None:
         """
         Continuously dequeue pairs of transactions from the monitor and reference
         queues and report mismatches to the scoreboard via the callback.
@@ -318,7 +340,7 @@ class Channel:
             self.log.info(self._q_ref.peek().tabulate())
 
 
-class FunnelChannel(Channel):
+class FunnelChannel(Channel[TX, TX_FILTERED]):
     """
     An extended scoreboard channel where the order of data exiting the monitor
     is not strictly defined, often due to the hardware interleaving different
@@ -343,10 +365,10 @@ class FunnelChannel(Channel):
     def __init__(
         self,
         name: str,
-        monitor: BaseMonitor,
+        monitor: BaseMonitor[TX],
         log: Logger,
-        filter_fn: Callable | None,
-        ref_queues: list[str] | tuple[str],
+        filter_fn: TransactionFilter[TX, TX_FILTERED],
+        ref_queues: Iterable[str],
         timeout_ns: int | None = None,
         polling_ns: int = 100,
         drain_policy: DrainPolicy = DrainPolicy.MON_AND_REF,
@@ -360,22 +382,21 @@ class FunnelChannel(Channel):
             polling_ns=polling_ns,
             drain_policy=drain_policy,
         )
-        self._q_ref = {x: Queue() for x in ref_queues}
+        self._q_ref = {x: Queue[TX_FILTERED]() for x in ref_queues}
 
     @property
     def reference_depth(self) -> int:
         return sum(x.level for x in self._q_ref.values())
 
     if TYPE_CHECKING:
+
         @overload
-        def push_reference(self, *transactions: BaseException) -> None:
-            ...
+        def push_reference(self, *transactions: TX_FILTERED) -> None: ...
 
     @overload
-    def push_reference(self, queue: str, *transactions: BaseException) -> None:
-        ...
+    def push_reference(self, queue: str, *transactions: TX_FILTERED) -> None: ...
 
-    def push_reference(self, queue: str | BaseException, *transactions: BaseException) -> None:
+    def push_reference(self, queue: str | TX_FILTERED, *transactions: TX_FILTERED) -> None:
         """
         Push one or more captured transactions into a given reference (model)
         queue.
@@ -383,12 +404,14 @@ class FunnelChannel(Channel):
         :param queue:         Name of the queue to push into
         :param *transactions: Captured transactions
         """
+        if isinstance(queue, BaseTransaction):
+            raise ValueError("Nameless queues are not supported by FunnelChannel")
         assert isinstance(queue, str) and queue in self._q_ref
         for transaction in transactions:
             assert isinstance(transaction, BaseTransaction)
             self._q_ref[queue].push(transaction)
 
-    async def _dequeue(self) -> tuple[BaseTransaction, BaseTransaction]:
+    async def _dequeue(self) -> tuple[TX_FILTERED, TX_FILTERED]:
         """
         Dequeue the top-most transaction from both the monitor and reference
         queues, searching through the reference queues for a matching object to
@@ -450,7 +473,7 @@ class FunnelChannel(Channel):
                 self.log.info(queue.peek().tabulate())
 
 
-class MiscompareError(Exception):
+class MiscompareError(Exception, Generic[TX, TX_FILTERED]):
     """
     Raises a miscomparison as an exception with associated data.
 
@@ -460,12 +483,19 @@ class MiscompareError(Exception):
     """
 
     def __init__(
-        self, channel: Channel, monitor: BaseTransaction, reference: BaseTransaction
+        self, channel: Channel[TX, TX_FILTERED], monitor: TX_FILTERED, reference: TX_FILTERED
     ) -> None:
         super().__init__()
         self.channel = channel
         self.monitor = monitor
         self.reference = reference
+
+
+T = TypeVar("T")
+
+
+class SizedIterable(Iterable[T], Sized):
+    pass
 
 
 class Scoreboard:
@@ -481,7 +511,7 @@ class Scoreboard:
 
     def __init__(
         self,
-        tb,
+        tb: BaseBench,
         fail_fast: bool = False,
         postmortem: bool = False,
     ):
@@ -494,9 +524,9 @@ class Scoreboard:
 
     def attach(
         self,
-        monitor: BaseMonitor,
-        filter_fn: Callable | None = None,
-        queues: list[str] | tuple[str] | None = None,
+        monitor: BaseMonitor[TX],
+        filter_fn: TransactionFilter[TX, TX_FILTERED] = lambda mon, evt, obj: obj,
+        queues: SizedIterable[str] | None = None,
         timeout_ns: int | None = None,
         polling_ns: int = 100,
         drain_policy: DrainPolicy = DrainPolicy.MON_AND_REF,
@@ -525,7 +555,7 @@ class Scoreboard:
                              queue (where N is set by match_window)
         """
         assert monitor.name not in self.channels, f"Monitor known for '{monitor.name}'"
-        if isinstance(queues, list | tuple) and len(queues) > 0:
+        if isinstance(queues, Iterable) and len(queues) > 0:
             channel = FunnelChannel(
                 monitor.name,
                 monitor,
@@ -561,7 +591,7 @@ class Scoreboard:
             self.log.info(f"Drained scoreboard channel '{name}'")
 
     def _mismatch(
-        self, channel: Channel, monitor: BaseTransaction, reference: BaseTransaction
+        self, channel: Channel[TX, TX_FILTERED], monitor: TX_FILTERED, reference: TX_FILTERED
     ) -> None:
         """
         Callback whenever a channel detects a mismatch between captured and
@@ -589,7 +619,7 @@ class Scoreboard:
             raise MiscompareError(channel, monitor, reference)
 
     def _match(
-        self, channel: Channel, monitor: BaseTransaction, reference: BaseTransaction
+        self, channel: Channel[TX, TX_FILTERED], monitor: TX_FILTERED, reference: TX_FILTERED
     ) -> None:
         """
         Callback whenever a channel detects a match between captured and
