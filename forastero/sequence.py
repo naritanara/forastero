@@ -20,17 +20,18 @@ from collections.abc import Callable, Coroutine, Iterable
 from enum import Enum, auto
 from logging import Logger
 from random import Random
-from typing import Any, ClassVar, Generic, Self, TypeVar
+from typing import Any, ClassVar, Generic, Self, TypeVar, overload
 
 import cocotb
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import Event, First, Lock
 
-from forastero.io import BaseIO
-
+from ._cocotb_compat import LogicObject
 from .component import Component
-from .driver import BaseDriver
+from .driver import BaseDriver, DriverEvent
 from .event import EventEmitter
+from .io import BaseIO
+from .transaction import BaseTransaction
 
 
 class SeqLock:
@@ -223,7 +224,7 @@ class SeqRandomVariable:
 
 
 C = TypeVar("C")
-
+TX = TypeVar("TX", bound=BaseTransaction)
 
 class SeqProxy(EventEmitter, Generic[C]):
     """
@@ -261,6 +262,14 @@ class SeqProxy(EventEmitter, Generic[C]):
         if not self._lock._lock.locked or self._holds_lock:
             self.publish(event, obj)
 
+    @overload
+    def enqueue(self, transaction: TX | Iterable[TX], wait_for: None = None) -> None:
+        ...
+
+    @overload
+    def enqueue(self, transaction: TX | Iterable[TX], wait_for: DriverEvent) -> Event:
+        ...
+
     def enqueue(self, *args: Any, **kwds: Any) -> Event | None:
         """
         Forward an enqueue request through from the proxy to the wrapped driver.
@@ -280,11 +289,11 @@ class SeqProxy(EventEmitter, Generic[C]):
             raise Exception(f"Cannot enqueue to '{type(self._component).__name__}'")
 
     @property
-    def clk(self) -> SimHandleBase:
+    def clk(self) -> LogicObject:
         return self._component.clk
 
     @property
-    def rst(self) -> SimHandleBase:
+    def rst(self) -> LogicObject:
         return self._component.rst
 
     @property

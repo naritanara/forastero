@@ -14,6 +14,7 @@
 
 import forastero
 from forastero import DriverEvent, SeqContext
+from forastero.sequence import SeqProxy
 
 from .initiator import StreamInitiator
 from .responder import StreamResponder
@@ -23,7 +24,7 @@ from .transaction import StreamBackpressure, StreamTransaction
 @forastero.sequence()
 @forastero.requires("stream", StreamInitiator)
 @forastero.randarg("length", range=(100, 1000))
-async def stream_traffic_seq(ctx: SeqContext, stream: StreamInitiator, length: int):
+async def stream_traffic_seq(ctx: SeqContext, stream: SeqProxy[StreamInitiator], length: int):
     """
     Generates random traffic on a stream interface, locking and releasing the
     driver for each packet.
@@ -43,7 +44,7 @@ async def stream_traffic_seq(ctx: SeqContext, stream: StreamInitiator, length: i
 @forastero.randarg("backpressure", range=(0.1, 0.9))
 async def stream_backpressure_seq(
     ctx: SeqContext,
-    stream: StreamResponder,
+    stream: SeqProxy[StreamResponder],
     min_interval: int,
     max_interval: int,
     backpressure: float,
