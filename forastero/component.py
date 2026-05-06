@@ -13,8 +13,9 @@
 # limitations under the License.
 
 import asyncio
+from enum import Enum
 from random import Random
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import RisingEdge
@@ -23,8 +24,10 @@ from ._cocotb_compat import LogicObject
 from .event import EventEmitter
 from .io import BaseIO
 
+_Event = TypeVar("_Event", bound=Enum)
+_Payload = TypeVar("_Payload")
 
-class Component(EventEmitter):
+class Component(EventEmitter[_Event, _Payload]):
     """
     Base component type for working with BaseIO interfaces, can be extended to
     form drivers, monitors, and other signalling protocol aware components.

@@ -7,29 +7,29 @@ class QueueEmptyError(Exception):
     pass
 
 
-T = TypeVar("T")
+_Item = TypeVar("_Item")
 
 
-class Queue(Generic[T]):
+class Queue(Generic[_Item]):
     """
     A custom queue implementation that allows peeking onto the head of the queue,
     which assists with the implementation of funnel-type channels.
     """
 
     def __init__(self) -> None:
-        self._entries = list[T]()
+        self._entries = list[_Item]()
         self._on_push = None
 
     def __len__(self) -> int:
         return self.level
 
     @overload
-    def __getitem__(self, key: SupportsIndex) -> T: ...
+    def __getitem__(self, key: SupportsIndex) -> _Item: ...
 
     @overload
-    def __getitem__(self, key: slice) -> list[T]: ...
+    def __getitem__(self, key: slice) -> list[_Item]: ...
 
-    def __getitem__(self, key: SupportsIndex | slice) -> T | list[T]:
+    def __getitem__(self, key: SupportsIndex | slice) -> _Item | list[_Item]:
         return self._entries[key]
 
     @property
@@ -47,7 +47,7 @@ class Queue(Generic[T]):
             self._on_push = Event()
         return self._on_push
 
-    def push(self, data: T) -> None:
+    def push(self, data: _Item) -> None:
         """
         Push an entry into the queue, notifying any observers that have
         registered an 'on-push' event.
@@ -59,7 +59,7 @@ class Queue(Generic[T]):
             self._on_push.set()
         self._on_push = None
 
-    async def pop(self, index: int = 0) -> T:
+    async def pop(self, index: int = 0) -> _Item:
         """
         Pop an entry from the queue, if necessary blocking until one is available.
 
@@ -79,7 +79,7 @@ class Queue(Generic[T]):
         if self.level == 0:
             await self.wait()
 
-    def peek(self) -> T:
+    def peek(self) -> _Item:
         if len(self._entries) == 0:
             raise QueueEmptyError()
         return self._entries[0]

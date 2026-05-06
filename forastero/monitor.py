@@ -16,7 +16,7 @@ import dataclasses
 from collections.abc import Callable
 from enum import Enum, auto
 from random import Random
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
 import cocotb
 from cocotb.handle import SimHandleBase
@@ -36,10 +36,10 @@ class MonitorStatistics:
     captured: int = 0
 
 
-TX = TypeVar("TX", bound=BaseTransaction)
+_Transaction = TypeVar("_Transaction", bound=BaseTransaction)
 
 
-class BaseMonitor(Component, Generic[TX]):
+class BaseMonitor(Component[MonitorEvent, _Transaction]):
     """
     Component for sampling transactions from an interface matching the
     implementation's signalling protocol.
@@ -72,14 +72,14 @@ class BaseMonitor(Component, Generic[TX]):
         await RisingEdge(self.clk)
         self._ready.set()
 
-        def _capture(obj: TX):
+        def _capture(obj: _Transaction):
             self.stats.captured += 1
             self.publish(MonitorEvent.CAPTURE, obj)
 
         while True:
             await self.monitor(_capture)
 
-    async def monitor(self, capture: Callable[[TX], None]) -> None:
+    async def monitor(self, capture: Callable[[_Transaction], None]) -> None:
         """
         Placeholder monitor, this should be overridden by a child class to match
         the signalling protocol of the interface's implementation.

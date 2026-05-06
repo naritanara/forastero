@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Sized
 from enum import Enum, auto
 from itertools import chain
 from logging import Logger
-from typing import TYPE_CHECKING, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, overload
 
 import cocotb
 from cocotb.triggers import First, RisingEdge, Timer
@@ -54,15 +54,25 @@ class DrainPolicy(Enum):
     """Do not wait for either queue to drain"""
 
 
-T = TypeVar("T")
-TX = TypeVar("TX", bound=BaseTransaction)
-TX_FILTERED = TypeVar("TX_FILTERED", bound=BaseTransaction, infer_variance=True, default=TX)
+_T = TypeVar("_T")
+_Transaction = TypeVar("_Transaction", bound=BaseTransaction)
+_Filtered_Transaction = TypeVar(
+    "_Filtered_Transaction", bound=BaseTransaction, infer_variance=True, default=_Transaction
+)
+_ChannelComparisonCallback = Callable[["Channel", _T, _T], None]
 
-TransactionFilter = Callable[[BaseMonitor[TX], MonitorEvent, TX], TX_FILTERED]
-ChannelComparisonCallback = Callable[["Channel", T, T], None]
+
+class TransactionFilter(Protocol, Generic[_Transaction, _Filtered_Transaction]):
+    def __call__(
+        self,
+        monitor: BaseMonitor[_Transaction],
+        event: MonitorEvent,
+        transaction: _Transaction,
+        /,
+    ) -> _Filtered_Transaction: ...
 
 
-class Channel(Generic[TX, TX_FILTERED]):
+class Channel(Generic[_Transaction, _Filtered_Transaction]):
     """
     A channel gathers transactions from a monitor and a reference model of some
     form. When both queues contain an entry, the top-most entry is popped from
@@ -90,9 +100,11 @@ class Channel(Generic[TX, TX_FILTERED]):
     def __init__(
         self,
         name: str,
-        monitor: BaseMonitor[TX],
+        monitor: BaseMonitor[_Transaction],
         log: Logger,
-        filter_fn: TransactionFilter[TX, TX_FILTERED] = lambda _mon, evt, obj: obj,
+        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction] = lambda _mon,
+        evt,
+        obj: obj,
         timeout_ns: int | None = None,
         polling_ns: int = 100,
         drain_policy: DrainPolicy = DrainPolicy.MON_AND_REF,
@@ -112,14 +124,14 @@ class Channel(Generic[TX, TX_FILTERED]):
         assert (
             isinstance(self.match_window, int) and self.match_window > 0
         ), "Channel matching window must be a positive integer"
-        self._q_mon = Queue[TX_FILTERED]()
-        self._q_ref = Queue[TX_FILTERED]()
+        self._q_mon = Queue[_Filtered_Transaction]()
+        self._q_ref = Queue[_Filtered_Transaction]()
         self._lock = Lock()
         self._matched = 0
         self._mismatched = 0
         self._residence = defaultdict(lambda: 0)
 
-        def _sample(mon: BaseMonitor[TX], evt: MonitorEvent, obj: TX) -> None:
+        def _sample(mon: BaseMonitor[_Transaction], evt: MonitorEvent, obj: _Transaction) -> None:
             if mon is self.monitor and evt is MonitorEvent.CAPTURE:
                 # If a filter function was provided, apply it
                 obj_filtered = self.filter_fn(mon, evt, obj)
@@ -155,7 +167,7 @@ class Channel(Generic[TX, TX_FILTERED]):
         """Total number of packets matched/mismatched"""
         return self._matched + self._mismatched
 
-    def push_monitor(self, *transactions: TX_FILTERED) -> None:
+    def push_monitor(self, *transactions: _Filtered_Transaction) -> None:
         """
         Push one or more captured transactions into the monitor's queue.
 
@@ -166,14 +178,16 @@ class Channel(Generic[TX, TX_FILTERED]):
             self._q_mon.push(transaction)
 
     @overload
-    def push_reference(self, *transactions: TX_FILTERED) -> None: ...
+    def push_reference(self, *transactions: _Filtered_Transaction) -> None: ...
 
     if TYPE_CHECKING:
 
         @overload
-        def push_reference(self, queue: str, *transactions: TX_FILTERED) -> None: ...
+        def push_reference(self, queue: str, *transactions: _Filtered_Transaction) -> None: ...
 
-    def push_reference(self, queue: str | TX_FILTERED, *transactions: TX_FILTERED) -> None:
+    def push_reference(
+        self, queue: str | _Filtered_Transaction, *transactions: _Filtered_Transaction
+    ) -> None:
         """
         Push one or more captured transactions into the reference (model) queue.
 
@@ -186,7 +200,7 @@ class Channel(Generic[TX, TX_FILTERED]):
             assert isinstance(transaction, BaseTransaction)
             self._q_ref.push(transaction)
 
-    async def _dequeue(self) -> tuple[TX_FILTERED, TX_FILTERED]:
+    async def _dequeue(self) -> tuple[_Filtered_Transaction, _Filtered_Transaction]:
         """
         Dequeue the top-most transaction from both the monitor and reference
         queues.
@@ -261,8 +275,8 @@ class Channel(Generic[TX, TX_FILTERED]):
 
     async def loop(
         self,
-        mismatch: ChannelComparisonCallback[TX_FILTERED],
-        match: ChannelComparisonCallback[TX_FILTERED] | None = None,
+        mismatch: _ChannelComparisonCallback[_Filtered_Transaction],
+        match: _ChannelComparisonCallback[_Filtered_Transaction] | None = None,
     ) -> None:
         """
         Continuously dequeue pairs of transactions from the monitor and reference
@@ -341,7 +355,7 @@ class Channel(Generic[TX, TX_FILTERED]):
             self.log.info(self._q_ref.peek().tabulate())
 
 
-class FunnelChannel(Channel[TX, TX_FILTERED]):
+class FunnelChannel(Channel[_Transaction, _Filtered_Transaction]):
     """
     An extended scoreboard channel where the order of data exiting the monitor
     is not strictly defined, often due to the hardware interleaving different
@@ -366,9 +380,9 @@ class FunnelChannel(Channel[TX, TX_FILTERED]):
     def __init__(
         self,
         name: str,
-        monitor: BaseMonitor[TX],
+        monitor: BaseMonitor[_Transaction],
         log: Logger,
-        filter_fn: TransactionFilter[TX, TX_FILTERED],
+        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction],
         ref_queues: Iterable[str],
         timeout_ns: int | None = None,
         polling_ns: int = 100,
@@ -383,7 +397,7 @@ class FunnelChannel(Channel[TX, TX_FILTERED]):
             polling_ns=polling_ns,
             drain_policy=drain_policy,
         )
-        self._q_ref = {x: Queue[TX_FILTERED]() for x in ref_queues}
+        self._q_ref = {x: Queue[_Filtered_Transaction]() for x in ref_queues}
 
     @property
     def reference_depth(self) -> int:
@@ -392,12 +406,14 @@ class FunnelChannel(Channel[TX, TX_FILTERED]):
     if TYPE_CHECKING:
 
         @overload
-        def push_reference(self, *transactions: TX_FILTERED) -> None: ...
+        def push_reference(self, *transactions: _Filtered_Transaction) -> None: ...
 
     @overload
-    def push_reference(self, queue: str, *transactions: TX_FILTERED) -> None: ...
+    def push_reference(self, queue: str, *transactions: _Filtered_Transaction) -> None: ...
 
-    def push_reference(self, queue: str | TX_FILTERED, *transactions: TX_FILTERED) -> None:
+    def push_reference(
+        self, queue: str | _Filtered_Transaction, *transactions: _Filtered_Transaction
+    ) -> None:
         """
         Push one or more captured transactions into a given reference (model)
         queue.
@@ -412,7 +428,7 @@ class FunnelChannel(Channel[TX, TX_FILTERED]):
             assert isinstance(transaction, BaseTransaction)
             self._q_ref[queue].push(transaction)
 
-    async def _dequeue(self) -> tuple[TX_FILTERED, TX_FILTERED]:
+    async def _dequeue(self) -> tuple[_Filtered_Transaction, _Filtered_Transaction]:
         """
         Dequeue the top-most transaction from both the monitor and reference
         queues, searching through the reference queues for a matching object to
@@ -474,7 +490,7 @@ class FunnelChannel(Channel[TX, TX_FILTERED]):
                 self.log.info(queue.peek().tabulate())
 
 
-class MiscompareError(Exception, Generic[TX, TX_FILTERED]):
+class MiscompareError(Exception, Generic[_Transaction, _Filtered_Transaction]):
     """
     Raises a miscomparison as an exception with associated data.
 
@@ -484,7 +500,10 @@ class MiscompareError(Exception, Generic[TX, TX_FILTERED]):
     """
 
     def __init__(
-        self, channel: Channel[TX, TX_FILTERED], monitor: TX_FILTERED, reference: TX_FILTERED
+        self,
+        channel: Channel[_Transaction, _Filtered_Transaction],
+        monitor: _Filtered_Transaction,
+        reference: _Filtered_Transaction,
     ) -> None:
         super().__init__()
         self.channel = channel
@@ -492,10 +511,7 @@ class MiscompareError(Exception, Generic[TX, TX_FILTERED]):
         self.reference = reference
 
 
-T = TypeVar("T")
-
-
-class SizedIterable(Iterable[T], Sized):
+class SizedIterable(Iterable[_T], Sized):
     pass
 
 
@@ -525,8 +541,10 @@ class Scoreboard:
 
     def attach(
         self,
-        monitor: BaseMonitor[TX],
-        filter_fn: TransactionFilter[TX, TX_FILTERED] = lambda mon, evt, obj: obj,
+        monitor: BaseMonitor[_Transaction],
+        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction] = lambda mon,
+        evt,
+        obj: obj,
         queues: SizedIterable[str] | None = None,
         timeout_ns: int | None = None,
         polling_ns: int = 100,
@@ -592,7 +610,10 @@ class Scoreboard:
             self.log.info(f"Drained scoreboard channel '{name}'")
 
     def _mismatch(
-        self, channel: Channel[TX, TX_FILTERED], monitor: TX_FILTERED, reference: TX_FILTERED
+        self,
+        channel: Channel[_Transaction, _Filtered_Transaction],
+        monitor: _Filtered_Transaction,
+        reference: _Filtered_Transaction,
     ) -> None:
         """
         Callback whenever a channel detects a mismatch between captured and
@@ -620,7 +641,10 @@ class Scoreboard:
             raise MiscompareError(channel, monitor, reference)
 
     def _match(
-        self, channel: Channel[TX, TX_FILTERED], monitor: TX_FILTERED, reference: TX_FILTERED
+        self,
+        channel: Channel[_Transaction, _Filtered_Transaction],
+        monitor: _Filtered_Transaction,
+        reference: _Filtered_Transaction,
     ) -> None:
         """
         Callback whenever a channel detects a match between captured and

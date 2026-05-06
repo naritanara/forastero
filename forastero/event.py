@@ -14,42 +14,63 @@
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Coroutine
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, Self, TypeVar, cast, overload
 
 import cocotb
-from cocotb.triggers import Event
+from cocotb.triggers import Event, Trigger
+
+_Event = TypeVar("_Event", infer_variance=True, bound=Enum)
+_Payload = TypeVar("_Payload", infer_variance=True)
+_EventEmitter = TypeVar("_EventEmitter", infer_variance=True)
 
 
-class DataEvent(Event):
+class DataEvent(Event, Generic[_Payload]):
     def __init__(self, *args, **kwds):
         super().__init__(*args, **kwds)
-        self.payload = None
 
-    def set(self, data=None):
+    @overload
+    def set(self, data: _Payload):
+        ...
+
+    if TYPE_CHECKING:
+        @overload
+        def set(self, data: object | None = None):
+            ...
+
+    def set(self, data: Any = None):
         super().set()
-        self.payload = data
+        self.payload = cast(_Payload, data)
 
     @property
-    def data(self):
+    def data(self) -> _Payload:
         """Alias for the event payload."""
         return self.payload
 
     @data.setter
-    def data(self, new_data):
+    def data(self, new_data: _Payload):
         self.payload = new_data
 
+class EventHandler(Protocol, Generic[_EventEmitter, _Event, _Payload]):
+    def __call__(
+        self, emitter: _EventEmitter, event: _Event, obj: _Payload, /
+    ) -> None | Coroutine[Trigger, None, None]: ...
 
-class EventEmitter:
+
+class EventEmitter(Generic[_Event, _Payload]):
     """Core support for publishing events and subscribing to them"""
+
+    _handlers: defaultdict[_Event | Literal["*"], list[EventHandler[Self, _Event, _Payload]]]
+    _ready: DataEvent[_Payload]
+    _waiting: defaultdict[_Event, list[DataEvent[_Payload]]]
 
     def __init__(self) -> None:
         self._handlers = defaultdict(list)
         self._ready = DataEvent()
         self._waiting = defaultdict(list)
 
-    def subscribe(self, event: Enum, callback: Callable) -> None:
+    def subscribe(self, event: _Event, callback: EventHandler[Self, _Event, _Payload]) -> None:
         """
         Subscribe to an event being published by this component.
 
@@ -62,7 +83,7 @@ class EventEmitter:
             raise TypeError(f"Event should inherit from Enum, unlike {event}")
         self._handlers[event].append(callback)
 
-    def subscribe_all(self, callback: Callable) -> None:
+    def subscribe_all(self, callback: EventHandler[Self, _Event, _Payload]) -> None:
         """
         Subscribe to all events published by this component.
 
@@ -72,7 +93,7 @@ class EventEmitter:
         """
         self._handlers["*"].append(callback)
 
-    def unsubscribe_all(self, event: Enum | None = None) -> None:
+    def unsubscribe_all(self, event: _Event | None = None) -> None:
         """
         De-register all subscribers for a given event (when event is not None),
         or all subscribers from all events (when event is None).
@@ -89,7 +110,7 @@ class EventEmitter:
             self._handlers[event].clear()
             self._waiting[event].clear()
 
-    def publish(self, event: Enum, obj: Any) -> None:
+    def publish(self, event: _Event, obj: _Payload) -> None:
         """
         Publish an event and deliver it to any registered subscribers.
 
@@ -107,12 +128,12 @@ class EventEmitter:
         for evt in pending:
             evt.set(data=obj)
 
-    def _get_wait_event(self, event: Enum) -> DataEvent:
+    def _get_wait_event(self, event: _Event) -> DataEvent[_Payload]:
         evt = DataEvent()
         self._waiting[event].append(evt)
         return evt
 
-    async def wait_for(self, event: Enum) -> Any:
+    async def wait_for(self, event: _Event) -> _Payload:
         """
         Wait for a specific enumerated event to occur and return the data that
         was associated to it.
