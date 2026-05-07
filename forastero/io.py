@@ -13,9 +13,8 @@
 # limitations under the License.
 
 import logging
-from collections.abc import Callable
 from enum import IntEnum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from cocotb.handle import HierarchyObject, SimHandleBase
 
@@ -95,6 +94,13 @@ class SignalWrapper:
         return self._width
 
 
+@runtime_checkable
+class IOStyle(Protocol):
+    def __call__(
+        self, bus: str | None, component: str, role_bus: IORole, role_component: IORole, /
+    ) -> str: ...
+
+
 def io_prefix_style(bus: str | None, component: str, role_bus: IORole, role_comp: IORole) -> str:
     """
     Style signal names as i/o_(<BUS>_)<COMPONENT> for example i_dma_awaddr and
@@ -171,7 +177,7 @@ class BaseIO:
     :param io_style:  Optionally override the default I/O naming style
     """
 
-    DEFAULT_IO_STYLE: Callable[[str | None, str, IORole, IORole], str] = io_prefix_style
+    DEFAULT_IO_STYLE: IOStyle = io_prefix_style
 
     def __init__(
         self,
@@ -180,24 +186,26 @@ class BaseIO:
         role: IORole,
         init_sigs: list[str],
         resp_sigs: list[str],
-        io_style: Callable[[str | None, str, IORole, IORole], str] | None = None,
+        io_style: IOStyle | None = None,
     ) -> None:
         # Sanity checks
         assert role in IORole, f"Role {role} is not recognised"
         assert isinstance(init_sigs, list), "Initiator signals are not a list"
         assert isinstance(resp_sigs, list), "Responder signals are not a list"
+        assert isinstance(io_style, IOStyle | None), "IO style does not fit the interface"
         # Hold onto attributes
         self._dut = dut
         self._name = name
         self._role = role
         self._init_sigs = init_sigs[:]
         self._resp_sigs = resp_sigs[:]
-        self._defaults = {}
+        self._defaults = dict[str, Any]()
         # If no IO style provided, adopt the default
         io_style = io_style or BaseIO.DEFAULT_IO_STYLE
         # Pickup all initiator and response signals wrapping each inside a
         # SignalWrapper to normalise its behaviour across simulators
-        self.__initiators, self.__responders = {}, {}
+        self.__initiators = dict[str, SignalWrapper]()
+        self.__responders = dict[str, SignalWrapper]()
         for comp in self._init_sigs:
             sig = io_style(self._name, comp, self._role, IORole.INITIATOR)
             if not hasattr(self._dut, sig):
