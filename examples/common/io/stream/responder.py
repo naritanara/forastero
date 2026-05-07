@@ -16,10 +16,11 @@ from cocotb.triggers import ClockCycles
 
 from forastero.driver import BaseDriver
 
+from .io import StreamIO
 from .transaction import StreamBackpressure
 
 
-class StreamResponder(BaseDriver[StreamBackpressure]):
+class StreamResponder(BaseDriver[StreamBackpressure, StreamIO]):
     async def drive(self, obj: StreamBackpressure) -> None:
-        self.io.set("ready", obj.ready)
+        self.io.ready = obj.ready
         await ClockCycles(self.clk, obj.cycles)

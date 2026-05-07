@@ -12,25 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from cocotb.handle import HierarchyObject
-
 from forastero import BaseIO
-from forastero.io import IORole, IOStyle
+from forastero.io import initiator, responder
 
 
 class StreamIO(BaseIO):
-    def __init__(
-        self,
-        dut: HierarchyObject,
-        name: str | None,
-        role: IORole,
-        io_style: IOStyle | None = None,
-    ) -> None:
-        super().__init__(
-            dut=dut,
-            name=name,
-            role=role,
-            init_sigs=["data", "valid"],
-            resp_sigs=["ready"],
-            io_style=io_style,
-        )
+    data: int = initiator()
+    valid: bool = initiator()
+    ready: bool = responder()

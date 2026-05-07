@@ -13,10 +13,21 @@
 # limitations under the License.
 
 import logging
-from enum import IntEnum
-from typing import Any, Protocol, runtime_checkable
+from enum import Enum, IntEnum, auto
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    Protocol,
+    dataclass_transform,
+    overload,
+    runtime_checkable,
+)
 
 from cocotb.handle import HierarchyObject, SimHandleBase
+
+SignalValue = bool | int
 
 
 class IORole(IntEnum):
@@ -164,7 +175,51 @@ def io_plain_style(bus: str | None, component: str, role_bus: IORole, role_comp:
         return f"{bus}_{component}"
 
 
-class BaseIO:
+def _private(**kwargs) -> Any:
+    pass
+
+
+class _SignalMarker(Enum):
+    INITIATOR = auto()
+    RESPONDER = auto()
+
+
+def initiator(init: Literal[False] = False) -> Any:
+    return _SignalMarker.INITIATOR
+
+
+def responder(init: Literal[False] = False) -> Any:
+    return _SignalMarker.RESPONDER
+
+
+@dataclass_transform(
+    eq_default=False,
+    field_specifiers=(
+        _private,
+        initiator,
+        responder,
+    ),
+)
+class BaseIOMeta(type):
+    def __new__(cls, *args, **kwargs):
+        cls = super().__new__(cls, *args, **kwargs)
+
+        # Find initiator and responder signals
+        cls._init_sigs = list[str]()
+        cls._resp_sigs = list[str]()
+        for attr in dir(cls):
+            value = getattr(cls, attr)
+            if value is _SignalMarker.INITIATOR:
+                cls._init_sigs.append(attr)
+                delattr(cls, attr)
+            elif value is _SignalMarker.RESPONDER:
+                cls._resp_sigs.append(attr)
+                delattr(cls, attr)
+        cls._sigs = cls._init_sigs + cls._resp_sigs
+        return cls
+
+
+class BaseIO(metaclass=BaseIOMeta):
     """
     Wraps a collection of different signals into a single interface that can be
     used by drivers and monitors to interact with the design.
@@ -177,29 +232,35 @@ class BaseIO:
     :param io_style:  Optionally override the default I/O naming style
     """
 
-    DEFAULT_IO_STYLE: IOStyle = io_prefix_style
+    _init_sigs: ClassVar[list[str]]
+    _resp_sigs: ClassVar[list[str]]
+    _sigs: ClassVar[list[str]]
+
+    DEFAULT_IO_STYLE: ClassVar[IOStyle] = io_prefix_style
+
+    _dut: HierarchyObject = _private(init=True, alias="dut")
+    _name: str | None = _private(init=True, alias="name")
+    _role: IORole = _private(init=True, alias="role")
+    _io_style: IOStyle | None = _private(init=True, default=None, alias="io_style")
+    _defaults: dict[str, SignalValue | None] = _private(init=False)
+    __initiators: dict[str, SignalWrapper] = _private(init=False)
+    __responders: dict[str, SignalWrapper] = _private(init=False)
 
     def __init__(
         self,
         dut: HierarchyObject,
         name: str | None,
         role: IORole,
-        init_sigs: list[str],
-        resp_sigs: list[str],
         io_style: IOStyle | None = None,
     ) -> None:
         # Sanity checks
         assert role in IORole, f"Role {role} is not recognised"
-        assert isinstance(init_sigs, list), "Initiator signals are not a list"
-        assert isinstance(resp_sigs, list), "Responder signals are not a list"
         assert isinstance(io_style, IOStyle | None), "IO style does not fit the interface"
         # Hold onto attributes
         self._dut = dut
         self._name = name
         self._role = role
-        self._init_sigs = init_sigs[:]
-        self._resp_sigs = resp_sigs[:]
-        self._defaults = dict[str, Any]()
+        self._defaults = dict[str, SignalValue | None]()
         # If no IO style provided, adopt the default
         io_style = io_style or BaseIO.DEFAULT_IO_STYLE
         # Pickup all initiator and response signals wrapping each inside a
@@ -215,9 +276,8 @@ class BaseIO:
                 continue
             sig_ptr = SignalWrapper(getattr(self._dut, sig))
             self.__initiators[comp] = sig_ptr
-            setattr(self, comp, sig_ptr)
         for comp in self._resp_sigs:
-            sig = io_style(name, comp, self._role, IORole.RESPONDER)
+            sig = io_style(self._name, comp, self._role, IORole.RESPONDER)
             if not hasattr(self._dut, sig):
                 logging.getLogger("tb").getChild(f"io.{type(self).__name__.lower()}").info(
                     f"{type(self).__name__}: Did not find I/O component {sig} on {dut}"
@@ -225,7 +285,6 @@ class BaseIO:
                 continue
             sig_ptr = SignalWrapper(getattr(self._dut, sig))
             self.__responders[comp] = sig_ptr
-            setattr(self, comp, sig_ptr)
 
     @property
     def role(self) -> IORole:
@@ -240,7 +299,7 @@ class BaseIO:
         for sig in (self.__initiators if role == IORole.INITIATOR else self.__responders).values():
             sig.value = 0
 
-    def set_default(self, comp: str, value: Any) -> None:
+    def set_default(self, comp: str, value: SignalValue | None) -> None:
         """
         Set the default value to be returned for a signal if it is not available.
 
@@ -258,7 +317,19 @@ class BaseIO:
         """
         return (comp in self.__initiators) or (comp in self.__responders)
 
-    def get(self, comp: str, default: Any = None) -> Any:
+    def get_signal(self, comp: str) -> SignalWrapper | None:
+        if comp in self.__initiators:
+            return self.__initiators[comp]
+        elif comp in self.__responders:
+            return self.__responders[comp]
+        else:
+            return None
+
+    @overload
+    def get(self, comp: str, default: SignalValue) -> SignalValue: ...
+    @overload
+    def get(self, comp: str) -> SignalValue | None: ...
+    def get(self, comp: str, default: SignalValue | None = None) -> SignalValue | None:
         """
         Get the current value of a particular signal.
 
@@ -266,23 +337,39 @@ class BaseIO:
         :param default: Default value if the signal is not resolved
         :returns:       The resolved value, otherwise the default
         """
-        item = getattr(self, comp, None)
-        if item is None:
-            return self._defaults.get(comp, None) if default is None else default
+        if signal := self.get_signal(comp):
+            raw = int(signal.value)
+            return (raw == 1) if len(signal) == 1 else raw
         else:
-            raw = int(item.value)
-            return (raw == 1) if len(item) == 1 else raw
+            return self._defaults.get(comp, None) if default is None else default
 
-    def set(self, comp: str, value: Any) -> None:
+    def set(self, comp: str, value: SignalValue) -> None:
         """
         Set the value of a particular signal if it exists.
 
         :param comp:  Name of the component
         :param value: Value to set
         """
-        if not self.has(comp):
-            return
-        getattr(self, comp).value = value
+        if signal := self.get_signal(comp):
+            signal.value = value
+
+    # NOTE: The type checker acts as if there is arbitrary attribute access if
+    #       these methods are visible
+    if not TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> Any:
+            if name in self._sigs:
+                return self.get(name)
+            else:
+                raise AttributeError(f"Class {self.__class__.__name__} has no attribute {name}")
+
+        def __setattr__(self, name: str, value: Any):
+            if name in self._sigs:
+                self.set(name, value)
+            elif hasattr(self, name):
+                super().__setattr__(name, value)
+            else:
+                raise AttributeError(f"Class {self.__class__.__name__} has no attribute {name}")
 
     def width(self, comp: str) -> int:
         """
@@ -291,7 +378,7 @@ class BaseIO:
         :param comp: Name of the component
         :returns:    The bit width if resolved, else 0
         """
-        if not self.has(comp):
+        if signal := self.get_signal(comp):
+            return max(signal._range) - min(signal._range) + 1
+        else:
             return 0
-        sig = getattr(self, comp)
-        return max(sig._range) - min(sig._range) + 1

@@ -22,8 +22,7 @@ import cocotb
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import RisingEdge
 
-from .component import Component
-from .io import BaseIO
+from .component import Component, _Io
 from .transaction import BaseTransaction
 
 
@@ -39,7 +38,7 @@ class MonitorStatistics:
 _Transaction = TypeVar("_Transaction", bound=BaseTransaction)
 
 
-class BaseMonitor(Component[MonitorEvent, _Transaction]):
+class BaseMonitor(Component[MonitorEvent, _Transaction, _Io]):
     """
     Component for sampling transactions from an interface matching the
     implementation's signalling protocol.
@@ -55,7 +54,7 @@ class BaseMonitor(Component[MonitorEvent, _Transaction]):
     def __init__(
         self,
         tb: Any,
-        io: BaseIO,
+        io: _Io,
         clk: SimHandleBase,
         rst: SimHandleBase,
         random: Random | None = None,

@@ -16,15 +16,16 @@ from cocotb.triggers import RisingEdge
 
 from forastero.driver import BaseDriver
 
+from .io import StreamIO
 from .transaction import StreamTransaction
 
 
-class StreamInitiator(BaseDriver[StreamTransaction]):
+class StreamInitiator(BaseDriver[StreamTransaction, StreamIO]):
     async def drive(self, obj: StreamTransaction) -> None:
-        self.io.set("data", obj.data)
-        self.io.set("valid", 1)
+        self.io.data = obj.data
+        self.io.valid = True
         while True:
             await RisingEdge(self.clk)
-            if self.io.get("ready", 1):
+            if self.io.ready:
                 break
-        self.io.set("valid", 0)
+        self.io.valid = False

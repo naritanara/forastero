@@ -18,14 +18,15 @@ from cocotb.triggers import RisingEdge
 
 from forastero import BaseMonitor
 
+from .io import StreamIO
 from .transaction import StreamTransaction
 
 
-class StreamMonitor(BaseMonitor[StreamTransaction]):
+class StreamMonitor(BaseMonitor[StreamTransaction, StreamIO]):
     async def monitor(self, capture: Callable[[StreamTransaction], None]) -> None:
         while True:
             await RisingEdge(self.clk)
             if self.rst.value == self.tb.rst_active_value:
                 continue
-            if self.io.get("valid", 1) and self.io.get("ready", 1):
-                capture(StreamTransaction(data=self.io.get("data", 0)))
+            if self.io.valid and self.io.ready:
+                capture(StreamTransaction(data=self.io.data))

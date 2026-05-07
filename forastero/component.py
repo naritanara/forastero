@@ -15,7 +15,7 @@
 import asyncio
 from enum import Enum
 from random import Random
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import RisingEdge
@@ -26,8 +26,9 @@ from .io import BaseIO
 
 _Event = TypeVar("_Event", bound=Enum)
 _Payload = TypeVar("_Payload")
+_Io = TypeVar("_Io", covariant=True, bound=BaseIO, default=BaseIO)
 
-class Component(EventEmitter[_Event, _Payload]):
+class Component(EventEmitter[_Event, _Payload], Generic[_Event, _Payload, _Io]):
     """
     Base component type for working with BaseIO interfaces, can be extended to
     form drivers, monitors, and other signalling protocol aware components.
@@ -41,6 +42,7 @@ class Component(EventEmitter[_Event, _Payload]):
     :param blocking: Whether this component should block shutdown (default: True)
     """
 
+    io: _Io
     clk: LogicObject
     rst: LogicObject
 
@@ -50,7 +52,7 @@ class Component(EventEmitter[_Event, _Payload]):
     def __init__(
         self,
         tb: Any,
-        io: BaseIO,
+        io: _Io,
         clk: SimHandleBase,
         rst: SimHandleBase,
         random: Random | None = None,

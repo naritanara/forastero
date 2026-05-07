@@ -23,8 +23,7 @@ from cocotb.handle import SimHandleBase
 from cocotb.triggers import Event, RisingEdge
 from cocotb.utils import get_sim_time
 
-from .component import Component
-from .io import BaseIO
+from .component import Component, _Io
 from .queue import Queue
 from .transaction import BaseTransaction, _NullWaitForEvent, _WaitForEvent, _WaitForEventProtocol
 
@@ -60,7 +59,9 @@ class EnqueuedIterable(Generic[_Transaction]):
         return self._iter
 
 
-class BaseDriver(Component[DriverEvent, _Transaction | EnqueuedIterable[_Transaction]]):
+class BaseDriver(
+    Component[DriverEvent, _Transaction | EnqueuedIterable[_Transaction], _Io],
+):
     """
     Component for driving transactions onto an interface matching the
     implementation's signalling protocol.
@@ -76,7 +77,7 @@ class BaseDriver(Component[DriverEvent, _Transaction | EnqueuedIterable[_Transac
     def __init__(
         self,
         tb: Any,
-        io: BaseIO,
+        io: _Io,
         clk: SimHandleBase,
         rst: SimHandleBase,
         random: Random | None = None,
