@@ -40,6 +40,7 @@ class _WaitForEvent(NamedTuple):
     def get_event(self) -> Event:
         return self.event
 
+
 class _NullWaitForEvent(_WaitForEventProtocol):
     def set_if_eq(self, event: Enum) -> bool:
         return False
@@ -63,7 +64,7 @@ class BaseTransaction:
     )
 
     _wait_for_event: _WaitForEventProtocol = dataclasses.field(
-        default_factory=_NullWaitForEvent, compare=False
+        default=_NullWaitForEvent(), init=False, repr=False, compare=False
     )
 
     def copy(self) -> "BaseTransaction":
