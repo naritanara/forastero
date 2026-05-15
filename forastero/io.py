@@ -262,7 +262,7 @@ class BaseIO(metaclass=BaseIOMeta):
         self._role = role
         self._defaults = dict[str, SignalValue | None]()
         # If no IO style provided, adopt the default
-        io_style = io_style or BaseIO.DEFAULT_IO_STYLE
+        io_style = io_style or self.__class__.DEFAULT_IO_STYLE
         # Pickup all initiator and response signals wrapping each inside a
         # SignalWrapper to normalise its behaviour across simulators
         self.__initiators = dict[str, SignalWrapper]()
