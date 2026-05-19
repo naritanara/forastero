@@ -108,7 +108,7 @@ class BaseTransaction:
         # Assemble rows
         rows = []
         for field in dataclasses.fields(self):
-            if field.name in ("_f_event", "_c_event"):
+            if not field.repr:
                 continue
             a_val = self.format(field.name, getattr(self, field.name))
             cols = [field.name, a_val]

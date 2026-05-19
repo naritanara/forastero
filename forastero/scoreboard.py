@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable, Sized
 from enum import Enum, auto
 from itertools import chain
 from logging import Logger
-from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast, overload
 
 import cocotb
 from cocotb.triggers import First, RisingEdge, Timer
@@ -69,7 +69,7 @@ class TransactionFilter(Protocol, Generic[_Transaction, _Filtered_Transaction]):
         event: MonitorEvent,
         transaction: _Transaction,
         /,
-    ) -> _Filtered_Transaction: ...
+    ) -> _Filtered_Transaction | None: ...
 
 
 class Channel(Generic[_Transaction, _Filtered_Transaction]):
@@ -102,9 +102,7 @@ class Channel(Generic[_Transaction, _Filtered_Transaction]):
         name: str,
         monitor: BaseMonitor[_Transaction],
         log: Logger,
-        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction] = lambda _mon,
-        evt,
-        obj: obj,
+        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction] | None = None,
         timeout_ns: int | None = None,
         polling_ns: int = 100,
         drain_policy: DrainPolicy = DrainPolicy.MON_AND_REF,
@@ -134,7 +132,10 @@ class Channel(Generic[_Transaction, _Filtered_Transaction]):
         def _sample(mon: BaseMonitor[_Transaction], evt: MonitorEvent, obj: _Transaction) -> None:
             if mon is self.monitor and evt is MonitorEvent.CAPTURE:
                 # If a filter function was provided, apply it
-                obj_filtered = self.filter_fn(mon, evt, obj)
+                if self.filter_fn is None:
+                    obj_filtered = cast(_Filtered_Transaction, obj)  # Should be the same type
+                else:
+                    obj_filtered = self.filter_fn(mon, evt, obj)
                 # A filter can drop the transaction, so test for None
                 if obj_filtered is not None:
                     self.push_monitor(obj_filtered)
