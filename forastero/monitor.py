@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import dataclasses
-from collections.abc import Callable
+from collections.abc import AsyncGenerator
 from random import Random
 from typing import TYPE_CHECKING, Generic, TypeVar
 
@@ -79,19 +79,13 @@ class BaseMonitor(Component[MonitorEvent[_Transaction], _Io]):
         await RisingEdge(self.clk)
         self._ready.set()
 
-        def _capture(obj: _Transaction):
+        async for tx in self.monitor():
             self.stats.captured += 1
-            self.publish(CaptureEvent(obj))
+            self.publish(CaptureEvent(tx))
 
-        while True:
-            await self.monitor(_capture)
-
-    async def monitor(self, capture: Callable[[_Transaction], None]) -> None:
+    def monitor(self) -> AsyncGenerator[_Transaction, None]:
         """
         Placeholder monitor, this should be overridden by a child class to match
         the signalling protocol of the interface's implementation.
-
-        :param capture: Function to call whenever a transaction is captured
         """
-        del capture
         raise NotImplementedError("monitor is not implemented on BaseMonitor")

@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable
-
 from cocotb.triggers import RisingEdge
 
 from forastero import BaseMonitor
@@ -23,10 +21,10 @@ from .transaction import StreamTransaction
 
 
 class StreamMonitor(BaseMonitor[StreamTransaction, StreamIO]):
-    async def monitor(self, capture: Callable[[StreamTransaction], None]) -> None:
+    async def monitor(self):
         while True:
             await RisingEdge(self.clk)
             if self.rst.value == self.tb.rst_active_value:
                 continue
             if self.io.valid and self.io.ready:
-                capture(StreamTransaction(data=self.io.data))
+                yield StreamTransaction(data=self.io.data)
