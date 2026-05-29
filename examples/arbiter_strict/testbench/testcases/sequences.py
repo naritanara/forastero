@@ -23,7 +23,7 @@ from common.io.stream import (
 )
 
 import forastero
-from forastero.sequence import SeqContext
+from forastero.sequence import SeqContext, SeqProxy
 
 from ..testbench import Testbench
 
@@ -34,8 +34,8 @@ from ..testbench import Testbench
 @forastero.randarg("length", range=(1000, 3000))
 async def burst_on_a_only(
     ctx: SeqContext,
-    stream_a: StreamInitiator,
-    stream_b: StreamInitiator,
+    stream_a: SeqProxy[StreamInitiator],
+    stream_b: SeqProxy[StreamInitiator],
     length: int,
 ):
     """

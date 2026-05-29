@@ -16,21 +16,27 @@ import contextlib
 import itertools
 import logging
 from collections import defaultdict
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Iterable
 from logging import Logger
 from random import Random
-from typing import Any, ClassVar, Generic, Self, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    Self,
+    TypeVar,
+    overload,
+)
 
 import cocotb
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import Event as CocotbEvent
 from cocotb.triggers import First, Lock
 
-from ._cocotb_compat import LogicObject
 from .component import Component
 from .driver import BaseDriver, DriverEvent
 from .event import Event, EventEmitter
-from .io import BaseIO
 from .transaction import BaseTransaction
 
 
@@ -231,87 +237,100 @@ class SeqRandomVariable:
         raise Exception("Failed to select a randomisation method")
 
 
-C = TypeVar("C", bound=Component)
+C = TypeVar("C", bound=Component, covariant=True)
+C_D = TypeVar("C_D", bound=BaseDriver)
 TX = TypeVar("TX", bound=BaseTransaction)
 
+if TYPE_CHECKING:
 
-class SeqProxy(EventEmitter, Generic[C]):
-    """
-    Wraps around a component to provide locking and masking functionality, this
-    is achieved by mocking functionality of a component including intercepting
-    and filtering events.
+    class SeqProxy(Component, Generic[C]):
+        _context: "SeqContext"
+        _component: C
+        _lock: SeqLock
 
-    :param context:   The sequence context associated to this proxy
-    :param component: The component to proxy
-    :param lock:      The shared lock for the component
-    """
+        def __init__(self, context: "SeqContext", component: C, lock: SeqLock) -> None: ...
 
-    def __init__(self, context: "SeqContext", component: C, lock: SeqLock) -> None:
-        super().__init__()
-        assert isinstance(component, Component)
-        self._context = context
-        self._component = component
-        self._lock = lock
-        # Subscribe to events from the component
-        self._component.subscribe_all(self._event_callback)
+        @overload
+        def enqueue(
+            self: "SeqProxy[BaseDriver[TX]]", transaction: TX | Iterable[TX], wait_for: None = None
+        ) -> None: ...
 
-    @property
-    def _holds_lock(self) -> bool:
-        return self._lock._lock.locked and self._lock._locked_by is self._context
+        @overload
+        def enqueue(
+            self: "SeqProxy[BaseDriver[TX]]",
+            transaction: TX | Iterable[TX],
+            wait_for: type[DriverEvent[TX]],
+        ) -> CocotbEvent: ...
 
-    def _event_callback(self, _comp: C, event: Event) -> None:
+        def enqueue(
+            self,
+            *args,
+            **kwargs,
+        ) -> Any: ...
+else:
+
+    class SeqProxy(EventEmitter, Generic[C]):
         """
-        Intercepts all events coming from the component and drops them if the
-        lock is held by another sequence.
+        Wraps around a component to provide locking and masking functionality, this
+        is achieved by mocking functionality of a component including intercepting
+        and filtering events.
 
-        :param comp:  Component emitting the event
-        :param event: The event being emitted
-        :param obj:   The event object
+        :param context:   The sequence context associated to this proxy
+        :param component: The component to proxy
+        :param lock:      The shared lock for the component
         """
-        if not self._lock._lock.locked or self._holds_lock:
-            self.publish(event)
 
-    @overload
-    def enqueue(self, transaction: TX | Iterable[TX], wait_for: None = None) -> None: ...
+        def __init__(self, context: "SeqContext", component: C, lock: SeqLock) -> None:
+            super().__init__()
+            assert isinstance(component, Component)
+            self._context = context
+            self._component = component
+            self._lock = lock
+            # Subscribe to events from the component
+            self._component.subscribe_all(self._event_callback)
 
-    @overload
-    def enqueue(
-        self, transaction: TX | Iterable[TX], wait_for: type[DriverEvent]
-    ) -> CocotbEvent: ...
+        @property
+        def _holds_lock(self) -> bool:
+            return self._lock._lock.locked and self._lock._locked_by is self._context
 
-    def enqueue(self, *args: Any, **kwds: Any) -> CocotbEvent | None:
-        """
-        Forward an enqueue request through from the proxy to the wrapped driver.
+        def _event_callback(self, _comp: C, event: Event) -> None:
+            """
+            Intercepts all events coming from the component and drops them if the
+            lock is held by another sequence.
 
-        :param *args: Arguments to forward
-        :param *kwds: Keyword arguments to forward
-        """
-        if isinstance(self._component, BaseDriver):
-            if not self._holds_lock:
-                raise Exception(
-                    f"Attempting to enqueue into {type(self._component).__name__} "
-                    f"without first acquiring the lock, instead the lock is held "
-                    f"by {self._lock._locked_by}"
-                )
-            return self._component.enqueue(*args, **kwds)
-        else:
-            raise Exception(f"Cannot enqueue to '{type(self._component).__name__}'")
+            :param comp:  Component emitting the event
+            :param event: The event being emitted
+            :param obj:   The event object
+            """
+            if not self._lock._lock.locked or self._holds_lock:
+                self.publish(event)
 
-    @property
-    def clk(self) -> LogicObject:
-        return self._component.clk
+        def enqueue(self, *args: Any, **kwds: Any) -> CocotbEvent | None:
+            """
+            Forward an enqueue request through from the proxy to the wrapped driver.
 
-    @property
-    def rst(self) -> LogicObject:
-        return self._component.rst
+            :param *args: Arguments to forward
+            :param *kwds: Keyword arguments to forward
+            """
+            if isinstance(self._component, BaseDriver):
+                if not self._holds_lock:
+                    raise Exception(
+                        f"Attempting to enqueue into {type(self._component).__name__} "
+                        f"without first acquiring the lock, instead the lock is held "
+                        f"by {self._lock._locked_by}"
+                    )
+                return self._component.enqueue(*args, **kwds)
+            else:
+                raise Exception(f"Cannot enqueue to '{type(self._component).__name__}'")
 
-    @property
-    def io(self) -> BaseIO:
-        return self._component.io
+        def __getattribute__(self, name: str, /) -> Any:
+            try:
+                return super().__getattribute__(name)
+            except AttributeError:
+                return getattr(self._component, name)
 
-    def idle(self) -> Coroutine[Any, Any, None]:
-        """Forward idle through to the wrapped component"""
-        return self._component.idle()
+        def __setattr__(self, name: str, value: Any, /) -> None:
+            return super().__setattr__(name, value)
 
 
 class SeqArbiter:
