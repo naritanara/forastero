@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import forastero
-from forastero import DriverEvent, SeqContext
+from forastero import SeqContext
+from forastero.driver import PreDriveEvent
 from forastero.sequence import SeqProxy
 
 from .initiator import StreamInitiator
@@ -70,5 +71,5 @@ async def stream_backpressure_seq(
                     )[0],
                     cycles=ctx.random.randint(min_interval, max_interval),
                 ),
-                DriverEvent.PRE_DRIVE,
+                PreDriveEvent,
             ).wait()

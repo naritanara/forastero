@@ -17,7 +17,7 @@ from logging import Logger
 from cocotb.triggers import ClockCycles
 from common.io.stream import StreamBackpressure, StreamTransaction
 
-from forastero import DriverEvent
+from forastero.driver import PostDriveEvent
 
 from ..testbench import Testbench
 
@@ -42,7 +42,7 @@ async def random(tb: Testbench, log: Logger, packets: int = 1000, delay: int = 5
             )
         )
 
-    tb.x_resp.subscribe(DriverEvent.POST_DRIVE, _rand_bp)
+    tb.x_resp.subscribe(PostDriveEvent, _rand_bp)
     _rand_bp()
 
     # Register a long-running coroutine

@@ -15,38 +15,10 @@
 import copy
 import dataclasses
 from enum import Enum
-from typing import Any, NamedTuple, Optional, Protocol
+from typing import Any, Optional
 
-from cocotb.triggers import Event
 from cocotb.utils import get_sim_time
 from tabulate import tabulate
-
-
-class _WaitForEventProtocol(Protocol):
-    def set_if_eq(self, event: Enum) -> bool: ...
-    def get_event(self) -> Event | None: ...
-
-
-class _WaitForEvent(NamedTuple):
-    wait_for: Enum
-    event: Event
-
-    def set_if_eq(self, event: Enum) -> bool:
-        trigger = self.wait_for == event
-        if trigger:
-            self.event.set()
-        return trigger
-
-    def get_event(self) -> Event:
-        return self.event
-
-
-class _NullWaitForEvent(_WaitForEventProtocol):
-    def set_if_eq(self, event: Enum) -> bool:
-        return False
-
-    def get_event(self) -> None:
-        return None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -61,10 +33,6 @@ class BaseTransaction:
 
     timestamp: int = dataclasses.field(
         default_factory=lambda: int(get_sim_time("ns")), compare=False
-    )
-
-    _wait_for_event: _WaitForEventProtocol = dataclasses.field(
-        default=_NullWaitForEvent(), init=False, repr=False, compare=False
     )
 
     def copy(self) -> "BaseTransaction":

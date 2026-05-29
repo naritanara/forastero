@@ -22,7 +22,7 @@ from common.io.stream import (
 )
 
 from forastero.bench import BaseBench, HasClock, HasReset
-from forastero.driver import DriverEvent
+from forastero.driver import DriverEvent, EnqueueEvent
 from forastero.io import IORole
 
 
@@ -32,6 +32,11 @@ class Testbench(BaseBench, HasClock, HasReset):
 
     :param dut: Reference to the arbiter DUT
     """
+
+    a_init: StreamInitiator
+    b_init: StreamInitiator
+    x_resp: StreamResponder
+    x_mon: StreamMonitor
 
     def __init__(self, dut: HierarchyObject) -> None:
         super().__init__(
@@ -56,14 +61,14 @@ class Testbench(BaseBench, HasClock, HasReset):
             scoreboard_match_window=4,
         )
         # Register callbacks to the model
-        self.a_init.subscribe(DriverEvent.ENQUEUE, self.model)
-        self.b_init.subscribe(DriverEvent.ENQUEUE, self.model)
+        self.a_init.subscribe(EnqueueEvent, self.model)
+        self.b_init.subscribe(EnqueueEvent, self.model)
 
-    def model(self, driver: StreamInitiator, event: DriverEvent, obj: StreamTransaction) -> None:
+    def model(self, driver: StreamInitiator, event: DriverEvent[StreamTransaction]) -> None:
         """
         Demonstration model that forwards transactions seen on interfaces A & B
         and sets bit 32 (to match the filtering behaviour below)
         """
         assert driver in (self.a_init, self.b_init)
-        assert event == DriverEvent.ENQUEUE
-        self.scoreboard.channels["x_mon"].push_reference(obj)
+        assert isinstance(event, EnqueueEvent)
+        self.scoreboard.channels["x_mon"].push_reference(*event.transactions)

@@ -17,21 +17,29 @@ import itertools
 import logging
 from collections import defaultdict
 from collections.abc import Callable, Coroutine, Iterable
-from enum import Enum, auto
 from logging import Logger
 from random import Random
 from typing import Any, ClassVar, Generic, Self, TypeVar, overload
 
 import cocotb
 from cocotb.handle import SimHandleBase
-from cocotb.triggers import Event, First, Lock
+from cocotb.triggers import Event as CocotbEvent
+from cocotb.triggers import First, Lock
 
 from ._cocotb_compat import LogicObject
 from .component import Component
 from .driver import BaseDriver, DriverEvent
-from .event import EventEmitter
+from .event import Event, EventEmitter
 from .io import BaseIO
 from .transaction import BaseTransaction
+
+
+class SeqContextEvent(Event):
+    pass
+
+
+class UnlockEvent(SeqContextEvent):
+    pass
 
 
 class SeqLock:
@@ -134,7 +142,7 @@ class SeqLock:
             self._locked_by = None
             self._lock.release()
             # Raise unlock event
-            SeqContext.SEQ_SHARED_EVENT.publish(SeqContextEvent.UNLOCKED, None)
+            SeqContext.SEQ_SHARED_EVENT.publish(UnlockEvent())
 
 
 class SeqRandomVariable:
@@ -223,8 +231,9 @@ class SeqRandomVariable:
         raise Exception("Failed to select a randomisation method")
 
 
-C = TypeVar("C")
+C = TypeVar("C", bound=Component)
 TX = TypeVar("TX", bound=BaseTransaction)
+
 
 class SeqProxy(EventEmitter, Generic[C]):
     """
@@ -250,7 +259,7 @@ class SeqProxy(EventEmitter, Generic[C]):
     def _holds_lock(self) -> bool:
         return self._lock._lock.locked and self._lock._locked_by is self._context
 
-    def _event_callback(self, comp: Component, event: Enum, obj: Any) -> None:
+    def _event_callback(self, _comp: C, event: Event) -> None:
         """
         Intercepts all events coming from the component and drops them if the
         lock is held by another sequence.
@@ -260,17 +269,17 @@ class SeqProxy(EventEmitter, Generic[C]):
         :param obj:   The event object
         """
         if not self._lock._lock.locked or self._holds_lock:
-            self.publish(event, obj)
+            self.publish(event)
 
     @overload
-    def enqueue(self, transaction: TX | Iterable[TX], wait_for: None = None) -> None:
-        ...
+    def enqueue(self, transaction: TX | Iterable[TX], wait_for: None = None) -> None: ...
 
     @overload
-    def enqueue(self, transaction: TX | Iterable[TX], wait_for: DriverEvent) -> Event:
-        ...
+    def enqueue(
+        self, transaction: TX | Iterable[TX], wait_for: type[DriverEvent]
+    ) -> CocotbEvent: ...
 
-    def enqueue(self, *args: Any, **kwds: Any) -> Event | None:
+    def enqueue(self, *args: Any, **kwds: Any) -> CocotbEvent | None:
         """
         Forward an enqueue request through from the proxy to the wrapped driver.
 
@@ -305,10 +314,6 @@ class SeqProxy(EventEmitter, Generic[C]):
         return self._component.idle()
 
 
-class SeqContextEvent(Enum):
-    UNLOCKED = auto()
-
-
 class SeqArbiter:
     """
     Arbitrates being queuing sequences to determine which sequences can start
@@ -320,7 +325,7 @@ class SeqArbiter:
         self._debug = log.getEffectiveLevel() <= logging.DEBUG
         self._random = Random(random.random())
         self._queue = []
-        self._evt_queue = Event()
+        self._evt_queue = CocotbEvent()
         cocotb.start_soon(self._manage())
 
     async def queue_for(self, context: "SeqContext", locks: list[SeqLock]) -> None:
@@ -332,7 +337,7 @@ class SeqArbiter:
         :param locks:   The list of locks required
         """
         # Queue up the context, locks it requests, and the stall event
-        self._queue.append((context, locks, evt := Event()))
+        self._queue.append((context, locks, evt := CocotbEvent()))
         # Mark a new entry as having been pushed
         self._evt_queue.set()
         # Wait for the event
@@ -349,7 +354,7 @@ class SeqArbiter:
                 available = {x for x in SeqLock.get_all_locks() if not x.locked}
                 # If no locks are available, wait for the next release
                 if not available:
-                    await SeqContext.SEQ_SHARED_EVENT.wait_for(SeqContextEvent.UNLOCKED)
+                    await SeqContext.SEQ_SHARED_EVENT.wait_for(UnlockEvent)
                     continue
                 # Randomise the order to process the queue
                 order = list(range(len(self._queue)))
@@ -406,9 +411,7 @@ class SeqArbiter:
                     # Clear trigger event so that the next queue_for raises it
                     self._evt_queue.clear()
                     await First(
-                        SeqContext.SEQ_SHARED_EVENT._get_wait_event(
-                            SeqContextEvent.UNLOCKED
-                        ).wait(),
+                        SeqContext.SEQ_SHARED_EVENT._get_wait_event(UnlockEvent).wait(),
                         self._evt_queue.wait(),
                     )
             # Clear the trigger event so that the next queue_for call retriggers
@@ -428,7 +431,7 @@ class SeqContext:
 
     SEQ_CTX_ID: ClassVar[dict[str, itertools.count]] = defaultdict(itertools.count)
     SEQ_SHARED_LOCK: ClassVar[Lock] = Lock()
-    SEQ_SHARED_EVENT: ClassVar[EventEmitter] = EventEmitter()
+    SEQ_SHARED_EVENT: ClassVar[EventEmitter[SeqContextEvent]] = EventEmitter()
 
     def __init__(
         self,

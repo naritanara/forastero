@@ -22,9 +22,9 @@ from common.io.stream import (
 )
 
 from forastero.bench import BaseBench, HasClock, HasReset
-from forastero.driver import DriverEvent
+from forastero.driver import DriverEvent, PostDriveEvent
 from forastero.io import IORole
-from forastero.monitor import MonitorEvent
+from forastero.monitor import CaptureEvent, MonitorEvent
 
 
 class Testbench(BaseBench, HasClock, HasReset):
@@ -33,6 +33,11 @@ class Testbench(BaseBench, HasClock, HasReset):
 
     :param dut: Reference to the arbiter DUT
     """
+
+    a_init: StreamInitiator
+    b_init: StreamInitiator
+    x_resp: StreamResponder
+    x_mon: StreamMonitor
 
     def __init__(self, dut: HierarchyObject) -> None:
         super().__init__(
@@ -58,29 +63,29 @@ class Testbench(BaseBench, HasClock, HasReset):
             scoreboard_filter=self.filter_x_mon,
         )
         # Register callbacks to the model
-        self.a_init.subscribe(DriverEvent.POST_DRIVE, self.model)
-        self.b_init.subscribe(DriverEvent.POST_DRIVE, self.model)
+        self.a_init.subscribe(PostDriveEvent, self.model)
+        self.b_init.subscribe(PostDriveEvent, self.model)
 
-    def model(self, driver: StreamInitiator, event: DriverEvent, obj: StreamTransaction) -> None:
+    def model(self, driver: StreamInitiator, event: DriverEvent[StreamTransaction]) -> None:
         """
         Demonstration model that forwards transactions seen on interfaces A & B
         and sets bit 32 (to match the filtering behaviour below)
         """
         assert driver in (self.a_init, self.b_init)
-        assert event == DriverEvent.POST_DRIVE
-        exp = StreamTransaction(data=obj.data | (1 << 32))
+        assert isinstance(event, PostDriveEvent)
+        exp = StreamTransaction(data=event.transaction.data | (1 << 32))
         if driver is self.a_init:
             self.scoreboard.channels["x_mon"].push_reference("a", exp)
         else:
             self.scoreboard.channels["x_mon"].push_reference("b", exp)
 
     def filter_x_mon(
-        self, monitor: StreamMonitor, event: MonitorEvent, obj: StreamTransaction
+        self, monitor: StreamMonitor, event: MonitorEvent[StreamTransaction]
     ) -> StreamTransaction:
         """
         Demonstration filter function that modifies the data captured from the
         X interface by always setting bit 32
         """
         assert monitor is self.x_mon
-        assert event is MonitorEvent.CAPTURE
-        return StreamTransaction(data=obj.data | (1 << 32))
+        assert isinstance(event, CaptureEvent)
+        return StreamTransaction(data=event.transaction.data | (1 << 32))

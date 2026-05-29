@@ -13,22 +13,24 @@
 # limitations under the License.
 
 import asyncio
-from enum import Enum
 from random import Random
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import RisingEdge
 
 from ._cocotb_compat import LogicObject
-from .event import EventEmitter
+from .event import Event, EventEmitter
 from .io import BaseIO
 
-_Event = TypeVar("_Event", bound=Enum)
-_Payload = TypeVar("_Payload")
+if TYPE_CHECKING:
+    from .bench import BaseBench
+
+_Event = TypeVar("_Event", bound=Event)
 _Io = TypeVar("_Io", covariant=True, bound=BaseIO, default=BaseIO)
 
-class Component(EventEmitter[_Event, _Payload], Generic[_Event, _Payload, _Io]):
+
+class Component(EventEmitter[_Event], Generic[_Event, _Io]):
     """
     Base component type for working with BaseIO interfaces, can be extended to
     form drivers, monitors, and other signalling protocol aware components.
@@ -51,7 +53,7 @@ class Component(EventEmitter[_Event, _Payload], Generic[_Event, _Payload, _Io]):
 
     def __init__(
         self,
-        tb: Any,
+        tb: "BaseBench",
         io: _Io,
         clk: SimHandleBase,
         rst: SimHandleBase,

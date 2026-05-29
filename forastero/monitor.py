@@ -14,20 +14,31 @@
 
 import dataclasses
 from collections.abc import Callable
-from enum import Enum, auto
 from random import Random
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 import cocotb
 from cocotb.handle import SimHandleBase
 from cocotb.triggers import RisingEdge
 
+from forastero.event import Event
+
 from .component import Component, _Io
 from .transaction import BaseTransaction
 
+if TYPE_CHECKING:
+    from .bench import BaseBench
 
-class MonitorEvent(Enum):
-    CAPTURE = auto()
+_Transaction = TypeVar("_Transaction", bound=BaseTransaction)
+
+
+class MonitorEvent(Event, Generic[_Transaction]):
+    pass
+
+
+@dataclasses.dataclass()
+class CaptureEvent(MonitorEvent[_Transaction]):
+    transaction: _Transaction
 
 
 @dataclasses.dataclass()
@@ -35,10 +46,7 @@ class MonitorStatistics:
     captured: int = 0
 
 
-_Transaction = TypeVar("_Transaction", bound=BaseTransaction)
-
-
-class BaseMonitor(Component[MonitorEvent, _Transaction, _Io]):
+class BaseMonitor(Component[MonitorEvent[_Transaction], _Io]):
     """
     Component for sampling transactions from an interface matching the
     implementation's signalling protocol.
@@ -53,7 +61,7 @@ class BaseMonitor(Component[MonitorEvent, _Transaction, _Io]):
 
     def __init__(
         self,
-        tb: Any,
+        tb: "BaseBench",
         io: _Io,
         clk: SimHandleBase,
         rst: SimHandleBase,
@@ -73,7 +81,7 @@ class BaseMonitor(Component[MonitorEvent, _Transaction, _Io]):
 
         def _capture(obj: _Transaction):
             self.stats.captured += 1
-            self.publish(MonitorEvent.CAPTURE, obj)
+            self.publish(CaptureEvent(obj))
 
         while True:
             await self.monitor(_capture)

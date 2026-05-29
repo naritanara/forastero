@@ -17,9 +17,15 @@ from asyncio import Lock
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sized
 from enum import Enum, auto
-from itertools import chain
 from logging import Logger
-from typing import TYPE_CHECKING, Generic, Protocol, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Generic,
+    Protocol,
+    TypeVar,
+    cast,
+    overload,
+)
 
 import cocotb
 from cocotb.triggers import First, RisingEdge, Timer
@@ -28,7 +34,7 @@ from cocotb.utils import get_sim_time
 if TYPE_CHECKING:
     from forastero.bench import BaseBench
 
-from .monitor import BaseMonitor, MonitorEvent
+from .monitor import BaseMonitor, CaptureEvent, MonitorEvent
 from .queue import Queue
 from .transaction import BaseTransaction
 
@@ -66,8 +72,7 @@ class TransactionFilter(Protocol, Generic[_Transaction, _Filtered_Transaction]):
     def __call__(
         self,
         monitor: BaseMonitor[_Transaction],
-        event: MonitorEvent,
-        transaction: _Transaction,
+        event: CaptureEvent[_Transaction],
         /,
     ) -> _Filtered_Transaction | None: ...
 
@@ -129,18 +134,20 @@ class Channel(Generic[_Transaction, _Filtered_Transaction]):
         self._mismatched = 0
         self._residence = defaultdict(lambda: 0)
 
-        def _sample(mon: BaseMonitor[_Transaction], evt: MonitorEvent, obj: _Transaction) -> None:
-            if mon is self.monitor and evt is MonitorEvent.CAPTURE:
+        def _sample(mon: BaseMonitor[_Transaction], evt: MonitorEvent[_Transaction]) -> None:
+            if mon is self.monitor and isinstance(evt, CaptureEvent):
                 # If a filter function was provided, apply it
                 if self.filter_fn is None:
-                    obj_filtered = cast(_Filtered_Transaction, obj)  # Should be the same type
+                    obj_filtered = cast(
+                        _Filtered_Transaction, evt.transaction
+                    )  # Should be the same type
                 else:
-                    obj_filtered = self.filter_fn(mon, evt, obj)
+                    obj_filtered = self.filter_fn(mon, evt)
                 # A filter can drop the transaction, so test for None
                 if obj_filtered is not None:
                     self.push_monitor(obj_filtered)
 
-        self.monitor.subscribe(MonitorEvent.CAPTURE, _sample)
+        self.monitor.subscribe(CaptureEvent, _sample)
         cocotb.start_soon(self._polling())
 
     @property
@@ -197,7 +204,10 @@ class Channel(Generic[_Transaction, _Filtered_Transaction]):
         if isinstance(queue, str):
             raise ValueError("Named queues are only supported by FunnelChannel")
 
-        for transaction in chain([queue], transactions):
+        self._push_reference(queue, *transactions)
+
+    def _push_reference(self, *transactions: _Filtered_Transaction) -> None:
+        for transaction in transactions:
             assert isinstance(transaction, BaseTransaction)
             self._q_ref.push(transaction)
 
@@ -383,7 +393,7 @@ class FunnelChannel(Channel[_Transaction, _Filtered_Transaction]):
         name: str,
         monitor: BaseMonitor[_Transaction],
         log: Logger,
-        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction],
+        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction] | None,
         ref_queues: Iterable[str],
         timeout_ns: int | None = None,
         polling_ns: int = 100,
@@ -515,7 +525,6 @@ class MiscompareError(Exception, Generic[_Transaction, _Filtered_Transaction]):
 class SizedIterable(Iterable[_T], Sized):
     pass
 
-
 class Scoreboard:
     """
     Scoreboard for comparing captured and reference transactions. The scoreboard
@@ -543,9 +552,7 @@ class Scoreboard:
     def attach(
         self,
         monitor: BaseMonitor[_Transaction],
-        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction] = lambda mon,
-        evt,
-        obj: obj,
+        filter_fn: TransactionFilter[_Transaction, _Filtered_Transaction] | None = None,
         queues: SizedIterable[str] | None = None,
         timeout_ns: int | None = None,
         polling_ns: int = 100,

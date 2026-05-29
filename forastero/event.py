@@ -15,62 +15,61 @@
 import asyncio
 from collections import defaultdict
 from collections.abc import Coroutine
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, Self, TypeVar, cast, overload
+from typing import (
+    Generic,
+    Literal,
+    Protocol,
+    Self,
+    TypeVar,
+)
+from warnings import deprecated
 
 import cocotb
-from cocotb.triggers import Event, Trigger
+from cocotb.triggers import Event as CocotbEvent
+from cocotb.triggers import Trigger
 
-_Event = TypeVar("_Event", infer_variance=True, bound=Enum)
-_Payload = TypeVar("_Payload", infer_variance=True)
+_Event = TypeVar("_Event", infer_variance=True, bound="Event")
 _EventEmitter = TypeVar("_EventEmitter", infer_variance=True)
 
 
-class DataEvent(Event, Generic[_Payload]):
+class Event:
+    pass
+
+
+class DataEvent(CocotbEvent, Generic[_Event]):
     def __init__(self, *args, **kwds):
         super().__init__(*args, **kwds)
 
-    @overload
-    def set(self, data: _Payload):
-        ...
+    payload: _Event
 
-    if TYPE_CHECKING:
-        @overload
-        def set(self, data: object | None = None):
-            ...
-
-    def set(self, data: Any = None):
+    def set_with(self, payload: _Event) -> None:
+        self.payload = payload
         super().set()
-        self.payload = cast(_Payload, data)
 
-    @property
-    def data(self) -> _Payload:
-        """Alias for the event payload."""
-        return self.payload
+    @deprecated("Use set_with instead")
+    def set(self, data: object = None):
+        raise NotImplementedError("Use set_with instead")
 
-    @data.setter
-    def data(self, new_data: _Payload):
-        self.payload = new_data
 
-class EventHandler(Protocol, Generic[_EventEmitter, _Event, _Payload]):
+class EventHandler(Protocol, Generic[_EventEmitter, _Event]):
     def __call__(
-        self, emitter: _EventEmitter, event: _Event, obj: _Payload, /
+        self, emitter: _EventEmitter, event: _Event, /
     ) -> None | Coroutine[Trigger, None, None]: ...
 
 
-class EventEmitter(Generic[_Event, _Payload]):
+class EventEmitter(Generic[_Event]):
     """Core support for publishing events and subscribing to them"""
 
-    _handlers: defaultdict[_Event | Literal["*"], list[EventHandler[Self, _Event, _Payload]]]
-    _ready: DataEvent[_Payload]
-    _waiting: defaultdict[_Event, list[DataEvent[_Payload]]]
+    _handlers: defaultdict[type[_Event] | Literal["*"], list[EventHandler[Self, _Event]]]
+    _ready: CocotbEvent
+    _waiting: defaultdict[type[_Event], list[DataEvent[_Event]]]
 
     def __init__(self) -> None:
         self._handlers = defaultdict(list)
-        self._ready = DataEvent()
+        self._ready = CocotbEvent()
         self._waiting = defaultdict(list)
 
-    def subscribe(self, event: _Event, callback: EventHandler[Self, _Event, _Payload]) -> None:
+    def subscribe(self, event: type[_Event], callback: EventHandler[Self, _Event]) -> None:
         """
         Subscribe to an event being published by this component.
 
@@ -79,11 +78,11 @@ class EventEmitter(Generic[_Event, _Payload]):
                          arguments of component, event type, and an associated
                          object
         """
-        if not isinstance(event, Enum):
+        if not issubclass(event, Event):
             raise TypeError(f"Event should inherit from Enum, unlike {event}")
         self._handlers[event].append(callback)
 
-    def subscribe_all(self, callback: EventHandler[Self, _Event, _Payload]) -> None:
+    def subscribe_all(self, callback: EventHandler[Self, _Event]) -> None:
         """
         Subscribe to all events published by this component.
 
@@ -93,7 +92,7 @@ class EventEmitter(Generic[_Event, _Payload]):
         """
         self._handlers["*"].append(callback)
 
-    def unsubscribe_all(self, event: _Event | None = None) -> None:
+    def unsubscribe_all(self, event: type[_Event] | None = None) -> None:
         """
         De-register all subscribers for a given event (when event is not None),
         or all subscribers from all events (when event is None).
@@ -104,13 +103,13 @@ class EventEmitter(Generic[_Event, _Payload]):
         if event is None:
             self._handlers.clear()
             self._waiting.clear()
-        elif not isinstance(event, Enum):
+        elif not issubclass(event, Event):
             raise TypeError(f"Event should inherit from Enum, unlike {event}")
         else:
             self._handlers[event].clear()
             self._waiting[event].clear()
 
-    def publish(self, event: _Event, obj: _Payload) -> None:
+    def publish(self, event: _Event) -> None:
         """
         Publish an event and deliver it to any registered subscribers.
 
@@ -118,22 +117,22 @@ class EventEmitter(Generic[_Event, _Payload]):
         :param obj:   Object associated to the event
         """
         # Call direct handlers
-        for handler in self._handlers["*"] + self._handlers[event]:
-            call = handler(self, event, obj)
+        for handler in self._handlers["*"] + self._handlers[event.__class__]:
+            call = handler(self, event)
             if asyncio.iscoroutine(call):
                 cocotb.start_soon(call)
         # Trigger pending events
-        pending = self._waiting[event][:]
-        self._waiting[event].clear()
+        pending = self._waiting[event.__class__][:]
+        self._waiting[event.__class__].clear()
         for evt in pending:
-            evt.set(data=obj)
+            evt.set_with(event)
 
-    def _get_wait_event(self, event: _Event) -> DataEvent[_Payload]:
+    def _get_wait_event(self, event: type[_Event]) -> DataEvent[_Event]:
         evt = DataEvent()
         self._waiting[event].append(evt)
         return evt
 
-    async def wait_for(self, event: _Event) -> _Payload:
+    async def wait_for(self, event: type[_Event]) -> _Event:
         """
         Wait for a specific enumerated event to occur and return the data that
         was associated to it.
